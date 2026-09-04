@@ -1,0 +1,8 @@
+# material de trabajo local (capturas, perfiles, pruebas sueltas)
+_ref/
+shots/
+test/dbg*.mjs
+*.log
+node_modules/
+Thumbs.db
+.DS_Store

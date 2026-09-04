@@ -1,0 +1,11 @@
+{
+  "name": "carrona",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Zombis top-down con ragdoll activo: física XPBD propia, músculos PD y marcha por IK, en Three.js",
+  "scripts": {
+    "test": "node test/t_world.mjs && node test/t_ragdoll.mjs && node test/t_nav.mjs && node test/t_props.mjs && node test/t_realism.mjs && node test/t_horde.mjs && node test/t_stampede.mjs && node test/t_hits.mjs && node test/t_anim.mjs",
+    "serve": "python serve.py"
+  }
+}
