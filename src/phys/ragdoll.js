@@ -35,7 +35,10 @@
 import { CT_DIST, CT_MIN, CT_MAX, PF_GROUND, PF_HIT } from './world.js';
 import { clamp, clamp01, lerp, angDelta, TAU } from '../core/util.js';
 import { NP, POSE, HEAD, NECK, CHEST, SHL, SHR, ELL, ELR, HAL, HAR, HIP, HPL, HPR, KNL, KNR, FTL, FTR } from './skeleton.js';
-import { SEQ, OVER, getUpsFor, pickWeighted, rotY, RUN_STYLES, WALK_STYLES, IDLE_OVERLAYS, JUMPS, VAULTS, DESCENTS, WOUNDS, HOP_STYLES, pickStyle, P as POSES } from './moves.js';
+import { SEQ, OVER, getUpsFor, pickWeighted, rotY, RUN_STYLES, WALK_STYLES, IDLE_OVERLAYS, JUMPS, VAULTS, DESCENTS, WOUNDS, HOP_STYLES, pickStyle, P as POSES, leg as poseLeg, arm as poseArm } from './moves.js';
+
+const smooth01 = (u) => { u = u < 0 ? 0 : u > 1 ? 1 : u; return u * u * (3 - 2 * u); };
+const segm = (u, a, b) => smooth01((u - a) / (b - a));
 
 export { NP, POSE, HEAD, NECK, CHEST, SHL, SHR, ELL, ELR, HAL, HAR, HIP, HPL, HPR, KNL, KNR, FTL, FTR };
 
@@ -427,12 +430,18 @@ export class Ragdoll {
       (w.pf[this.p[KNL]] & PF_GROUND) || (w.pf[this.p[KNR]] & PF_GROUND);
     this.airborne = grounded ? 0 : Math.min(1, this.airborne + dt * 2.5);
 
-    // — agachado previo al salto → despegue; en el aire → aterrizaje —
+    // — agachado previo al salto (carga), extensión de las piernas contra el piso
+    //   (la cadera sube, los talones se despegan, el PD ya levanta el cuerpo) →
+    //   despegue con la patada que falte; en el aire → aterrizaje —
     this.landT += dt;
+    if (this.landCrouch > 0 && this.landT > 0.6) this.landCrouch = 0;
     if (this.jumpPrep) {
       const JP = this.jumpPrep;
       JP.t += dt;
-      if (JP.t >= JP.dur) { this.jumpPrep = null; this._takeoff(JP); }
+      JP.u = clamp01(JP.t / JP.dur);
+      JP.d = JP.t > JP.dur ? clamp01((JP.t - JP.dur) / Math.max(0.01, JP.drive)) : 0;
+      if (JP.d > 0) this.tgtVY = JP.J.v0 * 0.85 * smooth01(JP.d);
+      if (JP.t >= JP.dur + JP.drive) { this.jumpPrep = null; this._takeoff(JP); }
     }
     if (this.flight) {
       const J = this.flight;
@@ -692,10 +701,9 @@ export class Ragdoll {
       this.accZ += (clamp(ez * 4.5, -14, 14) - this.accZ) * kA;
     }
     this._vpx = vx; this._vpz = vz;
-    // — aterrizaje: después de un vuelo, las rodillas absorben —
+    // — aterrizaje: después de un vuelo (sin salto: caerse de un mueble), las rodillas absorben —
     if (this.airborne > 0) this.airT += dt;
-    else { if (this.airT > 0.12) this.landCrouch = Math.min(0.55, 0.12 + this.airT * 0.5); this.airT = 0; }
-    if (this.landCrouch > 0) this.landCrouch -= dt;
+    else { if (this.airT > 0.12 && !this.flight) { this.landCrouch = Math.max(this.landCrouch, Math.min(0.55, 0.12 + this.airT * 0.5)); this.landT = 0; } this.airT = 0; }
     // — agacharse (jugador): mezcla suave —
     this.crouch += ((this.wantCrouch ? 1 : 0) - this.crouch) * (1 - Math.pow(0.002, dt));
     // — prepararse al caer: si va de cabeza al piso, los brazos salen a frenar —
@@ -1150,7 +1158,9 @@ export class Ragdoll {
     const lift = lerp(0.05, 0.30, g) * S * (this.isPlayer ? 1.2 : 1) * this._sp('lift', 1) * (1 + this._sp('stomp') * 0.5);
 
     // — agacharse / aterrizar / trepar / correr agachado: el tronco baja y las rodillas doblan (IK) —
-    let crouch = Math.max(this.crouch * 0.36, this.landCrouch > 0 ? Math.min(0.5, this.landCrouch) * 0.6 : 0) * S;
+    //   El aterrizaje tiene PESO: compresión rápida (80 ms) y recuperación lenta (450 ms)
+    const lenv = this._landEnv();
+    let crouch = Math.max(this.crouch * 0.36, lenv * 0.62) * S;
     crouch = Math.max(crouch, this._sp('crouchRun') * g * S);
     let vaultU = -1;
     if (this.vault) {
@@ -1158,16 +1168,23 @@ export class Ragdoll {
       // primero se agacha para tomar impulso, después se estira arriba
       crouch = Math.max(crouch, Math.sin(Math.PI * clamp01(vaultU / 0.5)) * 0.3 * S);
     }
-    // agachándose para saltar: las rodillas se cargan sin cortar la marcha
-    let prepK = 0;
+    // saltar: CARGA (las rodillas se doblan, el tronco se echa adelante, sin cortar la
+    // marcha) y después EXTENSIÓN (la cadera sube por encima de parado con los pies
+    // todavía en el piso: las piernas se estiran contra el suelo y los talones suben)
+    let prepK = 0, driveK = 0;
     if (this.jumpPrep) {
-      prepK = clamp01(this.jumpPrep.t / this.jumpPrep.dur);
-      crouch = Math.max(crouch, prepK * 0.30 * S);
+      prepK = smooth01(this.jumpPrep.u);
+      driveK = smooth01(this.jumpPrep.d);
+      const load = prepK * (1 - driveK) * 0.34 * S;
+      const ext = driveK * 0.14 * S;
+      crouch = Math.max(crouch, load) - ext;
     }
-    if (crouch > 0) {
+    if (crouch !== 0) {
       for (const i of [HIP, HPL, HPR, CHEST, NECK, HEAD, SHL, SHR]) T[i * 3 + 1] -= crouch;
-      T[CHEST * 3 + 2] += crouch * 0.45; T[NECK * 3 + 2] += crouch * 0.6; T[HEAD * 3 + 2] += crouch * 0.7;
+      if (crouch > 0) { T[CHEST * 3 + 2] += crouch * 0.45; T[NECK * 3 + 2] += crouch * 0.6; T[HEAD * 3 + 2] += crouch * 0.7; }
     }
+    // aterrizando el tronco se va adelante y la cabeza baja (el peso cae encima de las rodillas)
+    if (lenv > 0) { const e = lenv * S; T[CHEST * 3 + 2] += e * 0.30; T[NECK * 3 + 2] += e * 0.45; T[HEAD * 3 + 2] += e * 0.55; T[HEAD * 3 + 1] -= e * 0.15; }
 
     // dirección del paso en coordenadas locales (pasos laterales / hacia atrás / tambaleo / pivote)
     let sdx = 0, sdz = 1;
@@ -1196,6 +1213,9 @@ export class Ragdoll {
       if (lp < Math.PI) { const u = lp / Math.PI; fz = st * (1 - 2 * u); fy = 0; }
       else { const u = (lp - Math.PI) / Math.PI; const e = u * u * (3 - 2 * u); fz = st * (2 * e - 1); fy = lift * Math.sin(u * Math.PI); }
       fz *= amp; fy *= amp * (isLimp && P.dragLeg ? 0.15 : 1);   // la pierna que arrastra casi no se levanta
+      // extensión del salto: la pierna que estaba en vuelo sube la rodilla y va adelante
+      // (impulsa); la apoyada se queda clavada en el piso hasta el último instante
+      if (driveK > 0) { if (lp >= Math.PI) { fy += driveK * 0.32 * S; fz += driveK * 0.18 * S; } else { fy *= 1 - driveK; } }
       let footX = POSE[ft * 3] * S + sdx * fz - zig;
       let footY = POSE[ft * 3 + 1] * S + fy;
       let footZ = POSE[ft * 3 + 2] * S + sdz * fz;
@@ -1310,21 +1330,78 @@ export class Ragdoll {
 
     // — brazos —
     this._arms(T, ph, g, st, moving, vaultU);
-    // agachándose para saltar: los brazos van atrás a tomar envión
-    if (prepK > 0) { const e = prepK * 0.22 * S; T[HAL * 3 + 2] -= e; T[HAR * 3 + 2] -= e; T[HAL * 3 + 1] -= e * 0.4; T[HAR * 3 + 1] -= e * 0.4; T[ELL * 3 + 2] -= e * 0.5; T[ELR * 3 + 2] -= e * 0.5; }
+    // cargando el salto los brazos van atrás a tomar envión; en la extensión se
+    // lanzan adelante y arriba (el envión de los brazos es parte del salto)
+    if (prepK > 0) {
+      const e = prepK * (1 - driveK) * 0.24 * S, f = driveK * 0.30 * S;
+      for (const [ha, el] of [[HAL, ELL], [HAR, ELR]]) {
+        T[ha * 3 + 2] += -e + f * 1.2; T[ha * 3 + 1] += -e * 0.4 + f * 1.3;
+        T[el * 3 + 2] += -e * 0.5 + f * 0.5; T[el * 3 + 1] += f * 0.5;
+      }
+    }
+    // aterrizando los brazos salen adelante y arriba a equilibrar
+    if (lenv > 0) { const e = lenv * S; for (const [ha, el] of [[HAL, ELL], [HAR, ELR]]) { T[ha * 3 + 2] += e * 0.45; T[ha * 3 + 1] += e * 0.30; T[el * 3 + 2] += e * 0.2; T[el * 3 + 1] += e * 0.1; } }
     this._applyOverlays();
   }
 
-  /** Pose en el aire: la del estilo del salto; cerca del piso las piernas bajan a buscarlo. */
+  /** Envolvente del aterrizaje (0..~0.7): sube en 80 ms y baja en 450 ms; amplitud = velocidad de impacto. */
+  _landEnv() {
+    const A = this.landCrouch;
+    if (A <= 0) return 0;
+    const t = this.landT;
+    const env = t < 0.08 ? t / 0.08 : Math.max(0, 1 - (t - 0.08) / 0.45);
+    return Math.min(0.7, A) * env;
+  }
+
+  /**
+   * Pose en el aire. Sobre la figura del estilo se suman tres cosas que hacen
+   * que dos saltos nunca sean iguales y que se sienta la gravedad:
+   *  · la ZANCADA EN EL AIRE: la pierna que empujó al despegar (la que estaba
+   *    apoyada según la fase de la marcha) viaja de atrás hacia adelante durante
+   *    el vuelo, y los brazos siguen en oposición desde donde venían;
+   *  · la INCLINACIÓN por la velocidad vertical real: subiendo el tronco se echa
+   *    adelante, en el vértice se endereza, cayendo se abre;
+   *  · la PREPARACIÓN del aterrizaje por tiempo real hasta el piso de abajo
+   *    (no por fracción del vuelo): a 0,3 s de tocar, las piernas bajan a
+   *    buscar el suelo, los brazos se abren y la cabeza mira adonde va a caer.
+   */
   _jumpPose() {
     const J = this.flight, U = this._tA, T = this.target, sc = this.scale;
     const u = clamp01(J.t / J.dur);
+    const g = -this.world.gravity, vy = this.tgtVY, v0 = Math.max(0.5, J.v0);
+    const V = J.var;
     J.def.pose(U, u, J);
-    if (u > 0.72 && !J.dive) {
-      // preparar el aterrizaje: se mezcla con la pose de caer (pies abajo, rodillas listas)
-      const k = clamp01((u - 0.72) / 0.28) * 0.7;
-      const L = this._tB; POSES.land(L, 0.25);
-      for (let i = 0; i < NP * 3; i++) U[i] += (L[i] - U[i]) * k;
+    // tiempo real hasta tocar el piso de abajo (el arco puede seguir más allá de `dur` si baja de un mueble)
+    const hAbove = Math.max(0, this.groundY - this.floorY);
+    const tLand = (vy + Math.sqrt(Math.max(0, vy * vy + 2 * g * hAbove))) / g;
+    const landing = J.dive ? 0 : clamp01(1 - tLand / 0.30);
+    if (J.def.cycle) {
+      // zancada en el aire: la pierna de apoyo del despegue va de atrás hacia adelante
+      const side = J.swing ? 0 : 1;
+      const k = segm(J.t / Math.max(0.2, J.dur), 0.05, 0.75);
+      const fx = (side ? 0.13 : -0.13), fz = lerp(-0.40, 0.28, k) * V.stride, fy = 0.12 + 0.42 * Math.sin(k * Math.PI) * V.tuck;
+      poseLeg(U, side, fx, fy, fz, 0, 0.6, 1);
+      // la pierna de vuelo: rodilla alta al principio, se estira hacia adelante después
+      const sw = J.swing;
+      const k2 = segm(u, 0.0, 0.6);
+      poseLeg(U, sw, sw ? 0.13 : -0.13, lerp(0.55, 0.30, k2) * V.tuck + 0.12, lerp(0.30, 0.42, k2), 0, 0.7, 1);
+      // brazos: en oposición a las piernas (el opuesto a la pierna de vuelo adelante), abriéndose en el vértice
+      const open = Math.sin(u * Math.PI) * 0.25 * V.arms;
+      const fwdArm = sw ? 0 : 1, backArm = sw ? 1 : 0;
+      const sgnF = fwdArm ? 1 : -1, sgnB = backArm ? 1 : -1;
+      poseArm(U, fwdArm, sgnF * (0.26 + open), 1.15 + 0.20 * (1 - k2) + open * 0.5, 0.42 - 0.22 * k2, sgnF * 0.8, -0.2, -0.5);
+      poseArm(U, backArm, sgnB * (0.30 + open), 0.95 + open * 0.8, -0.30 + 0.45 * k2, sgnB * 0.7, 0.3, -0.7);
+    }
+    // inclinación por velocidad vertical: + adelante subiendo, se endereza y abre cayendo
+    const pitch = clamp(vy / v0, -1, 1) * 0.10 * V.lean;
+    for (const [i, f] of [[CHEST, 0.5], [NECK, 0.8], [HEAD, 1.1], [SHL, 0.6], [SHR, 0.6]]) { U[i * 3 + 2] += pitch * f; U[i * 3 + 1] -= Math.abs(pitch) * f * 0.25; }
+    // preparar el aterrizaje: piernas al piso, rodillas listas, brazos abiertos, mirada abajo
+    if (landing > 0) {
+      const L = this._tB; POSES.land(L, 0.28);
+      const k = landing * 0.75;
+      for (const i of [HPL, HPR, KNL, KNR, FTL, FTR]) for (let a = 0; a < 3; a++) U[i * 3 + a] += (L[i * 3 + a] - U[i * 3 + a]) * k;
+      for (const i of [ELL, ELR, HAL, HAR]) for (let a = 0; a < 3; a++) U[i * 3 + a] += (L[i * 3 + a] - U[i * 3 + a]) * k * 0.6;
+      U[HEAD * 3 + 1] -= landing * 0.05; U[HEAD * 3 + 2] += landing * 0.06;
     }
     for (let i = 0; i < NP * 3; i++) T[i] = U[i] * sc;
     // la cabeza sigue mirando al objetivo
@@ -2186,10 +2263,17 @@ export class Ragdoll {
     const def = JUMPS[style] || JUMPS.hop;
     const R = this.rng || Math.random;
     const g = -this.world.gravity;
+    // ¿qué pierna está apoyada ahora? (fase de la marcha): la que está en vuelo impulsa y sube
+    const phN = ((this.phase + this.pers.phaseOff) % TAU + TAU) % TAU;
+    const swing = phN < Math.PI ? 1 : 0;   // la izquierda en apoyo → la derecha (1) es la de vuelo
     const J = { style: def.name, def, v0, vx, vz, y0: this.groundY > -900 ? this.groundY : 0, t: 0, dur: Math.max(0.05, 2 * v0 / g),
-      s: opt.s ?? (R() < 0.5 ? 1 : 0), ph: R() * TAU, land: opt.land || 'crouch', dive: !!opt.dive, attack: opt.attack || null, target: opt.target || null, hit: false };
+      s: opt.s ?? (def.cycle ? swing : (R() < 0.5 ? 1 : 0)), swing, ph: R() * TAU, land: opt.land || 'crouch', dive: !!opt.dive, attack: opt.attack || null, target: opt.target || null, hit: false,
+      // cada salto es un poco distinto: cuánto recoge, cuánto abre los brazos, cuánto se inclina, cuánta zancada
+      var: { tuck: 0.75 + R() * 0.5, arms: 0.6 + R() * 0.8, lean: 0.7 + R() * 0.6, stride: 0.7 + R() * 0.6 } };
     const prep = opt.prep ?? def.prep;
-    if (prep > 0.001) this.jumpPrep = { t: 0, dur: prep, style: def.name, J };
+    // extensión: más larga cuanto más alto el salto (un brinco corto casi no la tiene)
+    const drive = opt.drive ?? clamp(0.04 + v0 * 0.014, 0.04, 0.10);
+    if (prep > 0.001 || drive > 0.001) this.jumpPrep = { t: 0, dur: Math.max(0.001, prep), drive, style: def.name, J, u: 0, d: 0 };
     else this._takeoff({ J });
     this.lunge = 0; this.stumbleT = 0; this.idleOv = null;
     return true;
@@ -2198,21 +2282,27 @@ export class Ragdoll {
     const J = JP.J, w = this.world;
     J.y0 = this.groundY > -900 ? this.groundY : 0;
     this.flight = J; this.jumps++; this.lastJump = J.style; this.airPeak = 0; this.airT = 0;
-    // patada real: todas las partículas salen con la velocidad del salto
+    // la patada es lo que FALTA para llegar a v0: la extensión ya levantó parte del cuerpo
+    let vy = 0, n = 0;
+    for (const i of [HIP, CHEST, HPL, HPR]) { const pi = this.p[i]; if (w.iw[pi] === 0) continue; vy += w.vy[pi]; n++; }
+    vy = n ? vy / n : 0;
+    const add = Math.max(0.35 * J.v0, J.v0 - vy);
     for (let i = 0; i < NP; i++) {
       const pi = this.p[i]; if (w.iw[pi] === 0) continue;
-      w.vy[pi] += J.v0;
+      w.vy[pi] += add;
       w.vx[pi] += (J.vx - w.vx[pi]) * 0.6; w.vz[pi] += (J.vz - w.vz[pi]) * 0.6;
     }
     this.rootVX = J.vx; this.rootVZ = J.vz;
   }
   _land(J) {
+    const vImp = Math.max(0, -this.tgtVY);   // velocidad con la que llega al piso
     this.flight = null; this.tgtVY = 0; this.landT = 0; this.landedJump = J;
     const R = this.rng || Math.random;
     const gy = this.groundY > -900 ? this.groundY : 0;
     const drop = Math.max(0, J.y0 - gy) + Math.max(0, this.airPeak);   // cuánto cayó en total
     this.lastLandDrop = drop;
-    this.landCrouch = Math.max(this.landCrouch, Math.min(0.6, J.def.land + drop * 0.25));
+    // cuánto se comprime: por la velocidad de impacto (más alto = más flexión), con el mínimo del estilo
+    this.landCrouch = Math.max(this.landCrouch, Math.min(0.7, Math.max(J.def.land, 0.18 + vImp * 0.075 + drop * 0.12)));
     const fwdV = J.vx * Math.sin(this.yaw) + J.vz * Math.cos(this.yaw);
     if (J.land === 'run') this.curSpeed = Math.hypot(J.vx, J.vz);
     // se tiró de cabeza (pounce, dive)

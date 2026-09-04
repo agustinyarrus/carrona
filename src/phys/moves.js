@@ -1437,16 +1437,18 @@ for (const name in SEQ) SEQ[name].name = name;
 //  pose(T, u, c): u = 0 despegue … 1 aterrizaje; c = { s, ph }. `prep`:
 //  segundos agachado antes de despegar; `land`: cuánto flexiona al caer.
 export const JUMPS = {
-  hop:      { pose: (T, u, c) => P.airHop(T, Math.sin(u * Math.PI)), prep: 0.10, land: 0.22 },
-  skip:     { pose: (T, u, c) => P.airSkip(T, c.s), prep: 0.05, land: 0.15 },
-  bound:    { pose: (T, u, c) => P.airSplit(T, c.s), prep: 0.12, land: 0.35 },
-  tuck:     { pose: (T, u, c) => blend(T, P.airHop, P.airTuck, Math.sin(u * Math.PI)), prep: 0.14, land: 0.45 },
+  //  cycle: la zancada en el aire y los brazos en oposición se suman encima (según
+  //  la pierna que estaba apoyada al despegar): saltos "de carrera", nunca iguales
+  hop:      { pose: (T, u, c) => P.airHop(T, Math.sin(u * Math.PI)), prep: 0.10, land: 0.22, cycle: true },
+  skip:     { pose: (T, u, c) => P.airSkip(T, c.s), prep: 0.05, land: 0.15, cycle: true },
+  bound:    { pose: (T, u, c) => P.airSplit(T, c.s), prep: 0.12, land: 0.35, cycle: true },
+  tuck:     { pose: (T, u, c) => blend(T, P.airHop, P.airTuck, Math.sin(u * Math.PI)), prep: 0.14, land: 0.45, cycle: true },
   superman: { pose: (T, u, c) => P.airSuperman(T), prep: 0.12, land: 0.5 },
   kick:     { pose: (T, u, c) => blend(T, (X) => P.airHop(X, 0.5), (X) => P.airKick(X, c.s), seg(u, 0.1, 0.5)), prep: 0.12, land: 0.4 },
   knee:     { pose: (T, u, c) => P.airKnee(T, c.s), prep: 0.12, land: 0.4 },
   star:     { pose: (T, u, c) => blend(T, P.airHop, P.airStar, Math.sin(u * Math.PI)), prep: 0.12, land: 0.35 },
   flail:    { pose: (T, u, c) => P.airFlail(T, c.ph + u * 9), prep: 0.08, land: 0.45 },
-  drop:     { pose: (T, u, c) => P.airDrop(T), prep: 0.0, land: 0.55 },
+  drop:     { pose: (T, u, c) => P.airDrop(T), prep: 0.0, land: 0.55, cycle: true },
   hurdle:   { pose: (T, u, c) => P.hurdle(T, c.s), prep: 0.06, land: 0.3 },
   wallkick: { pose: (T, u, c) => blend(T, (X) => P.airKick(X, c.s), P.airTuck, seg(u, 0.2, 0.8)), prep: 0.0, land: 0.4 },
   excited:  { pose: (T, u, c) => { P.airHop(T, 1); add(T, HAL, -0.10, 0.35, 0.10); add(T, HAR, 0.10, 0.35, 0.10); }, prep: 0.06, land: 0.15 },
