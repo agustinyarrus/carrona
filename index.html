@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CARRONA</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --fg: #e6e3dc; --dim: #8e8b85; --acc: #ffd24a; --red: #ff4a4a; --bg: #06070a;
+    --font: 'Cascadia Code', 'Cascadia Mono', 'Consolas', ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font-family: var(--font); font-weight: 200; overflow: hidden; }
+  body.ingame { cursor: none; }
+  #c { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  .layer { position: fixed; inset: 0; pointer-events: none; }
+  .screen { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; text-align: center; pointer-events: auto; }
+  .screen.on { display: flex; }
+  #loading { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: var(--bg); z-index: 50; letter-spacing: .5em; color: var(--dim); transition: opacity .6s; }
+  #loading.off { opacity: 0; pointer-events: none; }
+
+  /* ── menú ── */
+  #menu { background: linear-gradient(180deg, rgba(6,7,10,.35), rgba(6,7,10,.75)); }
+  .title { font-size: clamp(56px, 11vw, 168px); font-weight: 200; letter-spacing: .42em; margin-left: .42em; line-height: 1; color: #f2efe8; text-shadow: 0 0 40px rgba(255,210,74,.12); }
+  .sub { color: var(--dim); letter-spacing: .34em; margin: 14px 0 0 .34em; font-size: clamp(11px, 1.1vw, 15px); }
+  .keys { margin-top: 46px; display: grid; grid-template-columns: auto auto; gap: 8px 28px; text-align: left; color: var(--dim); font-size: 13px; letter-spacing: .12em; }
+  .keys b { color: var(--fg); font-weight: 400; }
+  .go { margin-top: 44px; letter-spacing: .5em; margin-left: .5em; color: var(--acc); animation: blink 1.6s ease-in-out infinite; font-size: 14px; }
+  #best, #dbest { margin-top: 18px; color: var(--dim); letter-spacing: .2em; font-size: 12px; }
+  @keyframes blink { 0%, 100% { opacity: .35 } 50% { opacity: 1 } }
+
+  /* ── muerte ── */
+  #death { background: radial-gradient(ellipse at center, rgba(40,4,6,.55), rgba(6,7,10,.9)); }
+  #death .title { color: #ff5a5a; text-shadow: 0 0 60px rgba(255,60,60,.25); }
+  #dstats { display: flex; gap: 42px; margin-top: 40px; }
+  #dstats div { display: flex; flex-direction: column; align-items: center; }
+  #dstats b { font-weight: 300; font-size: 38px; color: #f2efe8; }
+  #dstats span { color: var(--dim); letter-spacing: .25em; font-size: 11px; margin-top: 6px; }
+
+  /* ── pausa ── */
+  #pause { background: rgba(6,7,10,.72); }
+  .opts { display: grid; grid-template-columns: auto auto; gap: 18px 30px; align-items: center; margin-top: 30px; text-align: left; letter-spacing: .18em; font-size: 13px; color: var(--dim); }
+  .opts select, .opts input { font-family: var(--font); background: #101218; color: var(--fg); border: 1px solid #2a2d36; padding: 6px 10px; letter-spacing: .1em; }
+  .opts input[type=range] { width: 200px; accent-color: var(--acc); }
+  .hint { color: var(--dim); margin-top: 30px; letter-spacing: .3em; font-size: 12px; }
+
+  /* ── HUD ── */
+  #hud { display: none; }
+  #hud.on { display: block; }
+  .tl { position: absolute; left: 34px; top: 28px; letter-spacing: .22em; font-size: 12px; color: var(--dim); }
+  .hpwrap { width: 260px; height: 5px; background: rgba(255,255,255,.08); margin: 10px 0 8px; position: relative; }
+  #hpbar { height: 100%; width: 100%; transition: width .15s; }
+  #hptxt { position: absolute; right: -40px; top: -8px; color: var(--fg); font-size: 14px; letter-spacing: 0; }
+  #wave { color: var(--fg); font-size: 15px; letter-spacing: .36em; }
+  #kills, #left { margin-top: 6px; }
+  .br { position: absolute; right: 34px; bottom: 30px; text-align: right; letter-spacing: .22em; font-size: 12px; color: var(--dim); }
+  #weapon { color: var(--fg); font-size: 15px; letter-spacing: .36em; }
+  #ammo { font-size: 30px; margin-top: 4px; letter-spacing: .05em; color: var(--dim); }
+  #ammo b { font-weight: 300; color: var(--fg); font-size: 40px; }
+  .rlwrap { width: 180px; height: 3px; background: rgba(255,255,255,.08); margin: 8px 0 0 auto; opacity: 0; transition: opacity .2s; }
+  #reload { height: 100%; width: 0; background: var(--acc); }
+  #slots { margin-top: 10px; display: flex; gap: 10px; justify-content: flex-end; }
+  #slots span { width: 26px; height: 26px; border: 1px solid #2a2d36; display: inline-flex; align-items: center; justify-content: center; color: var(--dim); font-size: 12px; letter-spacing: 0; }
+  #slots span.cur { border-color: var(--acc); color: var(--acc); }
+  #flash { margin-top: 10px; letter-spacing: .3em; font-size: 11px; color: var(--acc); }
+  #flash.off { color: #3a3c44; }
+  #crosshair { position: fixed; left: 0; top: 0; width: 26px; height: 26px; border: 1px solid rgba(255,255,255,.75); border-radius: 50%; pointer-events: none; display: none; box-shadow: 0 0 0 1px rgba(0,0,0,.35); }
+  #crosshair::after { content: ''; position: absolute; left: 50%; top: 50%; width: 3px; height: 3px; margin: -1.5px; background: #fff; border-radius: 50%; }
+  body.ingame #crosshair { display: block; }
+  #announce { position: absolute; left: 0; right: 0; top: 18%; text-align: center; opacity: 0; transition: opacity .5s; }
+  #announce.show { animation: ann 3.2s ease-out forwards; }
+  #announce .big { font-size: clamp(30px, 4.6vw, 64px); letter-spacing: .5em; margin-left: .5em; color: #f2efe8; font-weight: 200; }
+  #announce .small { color: var(--dim); letter-spacing: .3em; margin-top: 8px; font-size: 13px; }
+  @keyframes ann { 0% { opacity: 0; transform: translateY(8px) } 12% { opacity: 1; transform: none } 80% { opacity: 1 } 100% { opacity: 0 } }
+  #toast { position: absolute; left: 0; right: 0; bottom: 18%; text-align: center; letter-spacing: .4em; color: var(--acc); font-size: 14px; opacity: 0; }
+  #toast.show { animation: ann 1.8s ease-out forwards; }
+  #perf { position: absolute; left: 34px; bottom: 26px; white-space: pre; font-size: 11px; color: var(--dim); letter-spacing: .05em; display: none; line-height: 1.6; }
+  #perf.on { display: block; }
+  .vig { position: fixed; inset: 0; pointer-events: none; background: radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,.35) 100%); }
+</style>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three/three.module.js", "three/addons/": "./vendor/three/addons/" } }
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="loading">CARRONA</div>
+
+<div id="hud" class="layer">
+  <div class="tl">
+    <div id="wave">PREPARATE</div>
+    <div class="hpwrap"><div id="hpbar"></div><div id="hptxt">100</div></div>
+    <div id="kills">0 bajas</div>
+    <div id="left"></div>
+  </div>
+  <div class="br">
+    <div id="weapon">PISTOLA</div>
+    <div id="ammo"><b>12</b> / ∞</div>
+    <div class="rlwrap"><div id="reload"></div></div>
+    <div id="slots"></div>
+    <div id="flash">LINTERNA · F</div>
+  </div>
+  <div id="announce"></div>
+  <div id="toast"></div>
+  <div id="perf"></div>
+</div>
+<div id="crosshair"></div>
+
+<div id="menu" class="screen">
+  <div class="title">CARRONA</div>
+  <div class="sub">UN LUGARCITO · MUCHOS ZOMBIS</div>
+  <div class="keys">
+    <span><b>WASD</b></span><span>moverte · <b>shift</b> correr</span>
+    <span><b>mouse</b></span><span>apuntar · <b>click</b> disparar</span>
+    <span><b>R</b></span><span>recargar · <b>1-4</b> armas</span>
+    <span><b>espacio</b></span><span>empujar / trepar (frente a un mueble)</span>
+    <span><b>C / ctrl</b></span><span>agacharse</span>
+    <span><b>Q / E</b></span><span>girar cámara · <b>rueda</b> zoom</span>
+    <span><b>F</b></span><span>linterna · <b>esc</b> pausa</span>
+  </div>
+  <div class="go">CLICK PARA EMPEZAR</div>
+  <div id="best"></div>
+</div>
+
+<div id="death" class="screen">
+  <div class="title">MORISTE</div>
+  <div class="sub">TE COMIERON EN LA OFICINA</div>
+  <div id="dstats"></div>
+  <div class="go">CLICK PARA REINTENTAR</div>
+  <div id="dbest"></div>
+</div>
+
+<div id="pause" class="screen">
+  <div class="title" style="font-size:clamp(32px,5vw,70px)">PAUSA</div>
+  <div class="opts">
+    <span>CALIDAD</span><select id="q-sel"><option value="bajo">bajo</option><option value="medio">medio</option><option value="alto">alto</option></select>
+    <span>VOLUMEN</span><input id="vol" type="range" min="0" max="100" value="80">
+    <span>SACUDIDA</span><input id="shake" type="range" min="0" max="100" value="100">
+  </div>
+  <div class="hint">ESC PARA SEGUIR</div>
+</div>
+<div class="vig"></div>
+
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
