@@ -4,9 +4,11 @@
 
 **Zombis top-down en una oficina de noche. Todos los cuerpos son ragdoll activo, todo el tiempo.**
 
-Motor de física propio, músculos que son controladores PD, marcha por cinemática inversa,
-horda que corre, choca, tropieza y se levanta. Un `index.html`, módulos ES, Three.js vendorizado.
-Cero dependencias que instalar, cero archivos de textura o de sonido: todo es procedural.
+Motor de física propio, músculos que son controladores PD, marcha por cinemática inversa y una
+biblioteca de movimientos físicos: quince maneras de levantarse, once de caer, seis de morir,
+diez sacudones por tiro, seis ataques, ocho tics y cien combinaciones de estilo de marcha.
+Un `index.html`, módulos ES, Three.js vendorizado. Cero dependencias que instalar, cero archivos
+de textura o de sonido: todo es procedural.
 
 ![JavaScript](https://img.shields.io/badge/JavaScript-ES2022-F7DF1E?logo=javascript&logoColor=black)
 ![Three.js](https://img.shields.io/badge/Three.js-r160-000000?logo=three.js&logoColor=white)
@@ -24,8 +26,10 @@ Un shooter de oleadas visto desde arriba. La gracia no está en las armas sino e
 no hay ni un solo clip de animación en el proyecto. Cada zombi y el jugador son un esqueleto
 de partículas que la física mueve, y lo único que cambia entre "camina", "corre", "se estrella
 contra la pared" y "muere" es cuánta fuerza hace cada músculo para llegar a su pose. Un tiro
-en el brazo apaga ese brazo. Una escopeta de frente lo tira de espaldas; por la espalda, de boca.
-Un corredor que pega contra un escritorio queda colgado de él y después se levanta.
+en el brazo apaga ese brazo. Un tiro en el pecho lo hace tambalear dos pasos hacia atrás y ahí
+se queda. Un tiro en el hombro lo hace girar. Una escopeta de frente lo sienta de espaldas; por
+la espalda, lo tira de boca. Un corredor que pega contra un escritorio queda colgado de él,
+y después se levanta: rodando y empujando con los brazos, o de un salto si tiene apuro.
 
 <div align="center">
 
@@ -62,7 +66,7 @@ y sin una pierna el zombi se arrastra. Entre oleadas caen munición, botiquines 
 
 ## El core
 
-Nueve mil líneas de JavaScript sin framework. Estas son las piezas y por qué son así.
+Diez mil líneas de JavaScript sin framework. Estas son las piezas y por qué son así.
 
 ### 1. Motor de física XPBD (`src/phys/world.js`)
 
@@ -87,13 +91,13 @@ Position Based Dynamics extendido, escrito desde cero para este juego.
 - **Raycast contra estáticos** para la puntería y para la raíz de los cuerpos, y `compact()`
   para reciclar partículas de cuerpos que ya no existen.
 
-Costo medido con la CPU libre: 40 ragdolls más 40 cajas y 12 cilindros en 8 ms por cuadro;
+Costo medido con la CPU libre: 40 ragdolls más 40 cajas y 12 cilindros en 9 ms por cuadro;
 916 partículas con 3250 restricciones en 11 ms.
 
 ### 2. Ragdoll activo (`src/phys/ragdoll.js`)
 
 Un humanoide de **16 partículas y 15 huesos** (cabeza, cuello, pecho, hombros, codos, manos,
-cadera, rodillas, pies) con una pose de referencia en metros. Sobre esa base:
+cadera, rodillas, pies) con una pose de referencia en metros (`skeleton.js`). Sobre esa base:
 
 **Músculos como controlador PD, no como resorte.** Cada partícula tiene un objetivo (su lugar en
 la pose, ya orientado y desplazado con la raíz). En cada substep el músculo tira la posición
@@ -108,62 +112,67 @@ a = (1 - phys) · min(1, max(0, (m - 0.02) · 14)) · min(1, 1.45 · sqrt(kSub �
 amortiguación infinita el cuerpo llegaba exacto a su pose y parecía un maniquí; con menos que
 crítica oscilaba a 18 rad/s alrededor de la pose aun al 1 % de fuerza y cada empujón rebotaba.
 Con esto el torso queda firme y la cabeza y los brazos llegan con un retraso y un pequeño
-sobrepaso, que es lo que se lee como movimiento secundario.
+sobrepaso, que es lo que se lee como movimiento secundario. Cayendo o muriendo la
+amortiguación se apaga del todo: la inercia manda.
 
 **Raíz virtual con correa.** El cuerpo no se mueve empujando partículas: se mueve un punto
 invisible (la raíz) al que la pose está anclada, y los músculos lo siguen. La raíz avanza por
 substep (no por cuadro, para que no haya dientes de sierra), nunca cruza una pared (raycast
 antes de cada paso), no entra en otro cuerpo de pie (resbala tangencialmente a su alrededor y
 los dos se dan un topetazo) y tiene una correa: si el cuerpo se queda atrás más de cierto largo,
-la raíz espera.
+la raíz espera. Cayendo, la pose se ancla al **centro de masa** del cuerpo real: el músculo da
+forma a los miembros sin empujar al conjunto, y el momento que traía se conserva.
 
 **Velocidad con inercia.** La velocidad pedida por la IA o el jugador se rampa a 9 m/s² al
 acelerar y 14 al frenar. Arrancar y parar toman tiempo y el cuerpo se **inclina al esfuerzo**:
 la diferencia entre la velocidad que quiere y la que tiene se convierte en una inclinación del
-torso, adelante al arrancar, atrás al frenar. Sólo cuando intenta moverse: parado y empujado no
-se inclina contra el empujón, si no el músculo anulaba el retroceso de los tiros.
+torso, adelante al arrancar, atrás al frenar.
 
 **Marcha por cinemática inversa.** No hay ciclo de caminata grabado. Cada pie sigue una
 trayectoria: apoyo lineal a la velocidad del cuerpo y vuelo en arco, con zancada proporcional a
 la velocidad y en la dirección del movimiento (el jugador da pasos laterales mientras apunta a
-otro lado). La rodilla se resuelve con IK de dos huesos usando el largo real de muslo y
-pantorrilla, doblando siempre hacia adelante. Caminar, trotar y correr son la misma marcha
-mezclada por velocidad: rodilla mínima de 125°, 103° y 89°, pie que sube 16, 26 y 34 cm. Los
-codos también salen por IK.
+otro lado; un tiro hace dar pasos hacia atrás). La rodilla se resuelve con IK de dos huesos
+usando el largo real de muslo y pantorrilla, doblando siempre hacia adelante. Caminar, trotar y
+correr son la misma marcha mezclada por velocidad: rodilla mínima de 125°, 103° y 89°, pie que
+sube 16, 26 y 34 cm. Los codos también salen por IK.
 
-**Personalidad por cuerpo.** Largo de zancada, balanceo, cadencia irregular, un brazo más
-vago que el otro, encorvamiento y bandazos se sortean por zombi. Una horda no se ve clonada.
+**Estilos de marcha** (`moves.js`): cada cuerpo sortea al nacer un estilo de caminar y uno de
+correr, y los mezcla según la marcha. Diez de correr (sprint, carga con los brazos atrás,
+agitando los brazos, a zancadas, como un toro con la cabeza gacha, molinete, rengo, agachado,
+pisando fuerte, a saltos) y diez de caminar (arrastrando los pies, arrastrando una pierna,
+tieso, encorvado, con los brazos extendidos, con tics, bamboleándose, ladeado, tambaleante,
+rengo). Cien combinaciones: una horda no se ve clonada.
 
-**Mirar.** La cabeza apunta al objetivo mientras persigue.
+**Máquina de estados y biblioteca de movimientos** (`moves.js`). Un movimiento es una
+secuencia de poses objetivo generadas por funciones, con un perfil de músculo por miembro,
+movimiento de raíz, giros de marco e impulsos puntuales. Los músculos tiran hacia esas poses y
+la física hace el resto: por eso una levantada choca con el escritorio de al lado.
 
-**Estados, todos físicos:**
-
-| Estado | Qué pasa |
+| Estado | Qué corre |
 |---|---|
-| tropiezo | si un pie o una rodilla queda trabado en algo bajo mientras el torso sigue, se va de boca |
-| choque contra pared | corriendo a más de 1.8 m/s con poco avance real: pierde el control, pega con su inercia, queda tirado, se levanta |
-| topetazo | dos cuerpos que se cruzan a la carrera se sacuden mutuamente; el de adelante puede salir volando |
-| golpe fuerte | física pura un instante (`limp`), ~1 s en el piso aturdido, ~1 s levantándose con los músculos subiendo en curva |
-| brazos al caer | cayendo de boca las manos salen adelante y abajo a frenar el golpe |
-| trepar | guion de 0.85 s: se agacha, manos al borde, recoge las piernas, se estira arriba. Los zombis lo hacen solos con escritorios y mesas; el jugador con Espacio |
-| agacharse | el tronco baja, las rodillas doblan por IK, camina a la mitad |
-| aterrizar | tras más de 0.12 s en el aire las rodillas absorben la caída |
-| muerte | todos los músculos se apagan y cae con la inercia que traía; o instantánea si es un tiro a la cabeza |
-| desmembrado | un miembro cortado se separa como cuerpo aparte; sin pierna, el resto se arrastra |
+| de pie | la marcha con su estilo, más **overlays** que se suman sin interrumpirla: diez sacudones por tiro (la cabeza se va, el pecho se pliega, la espalda se arquea, se dobla por el estómago, el hombro lo gira, el brazo vuela, la cadera se va, se ladea, la pierna da un saltito, sacudida entera), seis ataques y ocho tics de quieto |
+| tambaleo | pasos reales en la dirección del golpe con latigazo del torso; la raíz se va con él y el cuerpo **queda desplazado**, no vuelve como una goma |
+| cayendo | una de **once caídas** elegida por causa y ángulo: sentarse de espaldas, de tabla, de boca, de rodillas y de boca, de costado, girando, desplomarse, volando, voltereta (el corredor), rebote contra la pared, tacle |
+| tirado | física pura, aturdido un tiempo que depende del tipo (el corredor 0.35 s, el bruto 1.3 s) |
+| levantándose | una de **quince levantadas** elegida por cómo quedó. Boca arriba: abdominal, rodar y empujar, de un salto, pesada, rodar y gatear. Boca abajo: flexión, rodilla primero, rodar y sentarse, gatear, rápida. De costado: a boca abajo, a boca arriba, sobre el codo. Y desde arrodillado o sentado. El peso de cada una depende del tipo de cuerpo |
+| descansando | dormido en el piso o sentado contra la pared hasta que algo lo despierte; entonces se levanta como corresponda |
+| muriendo | una de **seis muertes**: se desploma, camina herido y cae, cae de rodillas y de boca, se arquea de espaldas, gira y cae, se dobla y se va de costado. Un tiro en la cabeza es instantáneo |
 
 **Reacción al disparo**, el patrón de "physical animation":
 
 1. Impulso local en el punto del hueso donde pegó: el miembro se va y el torso gira si el
    tiro fue descentrado.
-2. Momento al cuerpo entero (impulso sobre masa, ×1.8, piernas ×0.3 para que se tumbe en vez de
-   deslizarse) y **el objetivo de equilibrio se muda** un 28 % del desplazamiento: queda corrido,
-   no vuelve a su lugar como una goma.
-3. La cadena golpeada pierde el músculo un instante; el impulso acumulado decae con τ de
-   0.17 s y si supera el 42 % de la masa el cuerpo entero pierde el control y cae.
-4. Por zona: la cabeza se va; una pierna se dobla si está parado o lo hace tropezar si corre; un
-   brazo cuelga y vuelve algo más débil (heridas permanentes que recuperan a 0.5 por segundo).
-5. Mucho momento en poco tiempo (escopeta, ráfaga) lo tira: hacia atrás si viene de frente, de
-   boca si viene por la espalda.
+2. Un sacudón elegido por zona y ángulo (la tabla de arriba), encima de lo que estuviera haciendo.
+3. Un tambaleo con pasos reales en la dirección del tiro; el objetivo de equilibrio se muda.
+4. Un tiro en el hombro hace girar el cuerpo. Un tiro en la pierna corriendo lo tropieza (el
+   corredor da la voltereta y sigue); parado, se le dobla la rodilla o se desploma si fue fuerte.
+5. Mucho momento en poco tiempo (escopeta, ráfaga) lo tira, con una caída elegida por el ángulo.
+
+**Colisiones a la carrera.** Contra una pared de frente: rebota y cae; de refilón: raspa el
+hombro, gira y sigue tambaleando a lo largo de la pared. Contra otro cuerpo: por la espalda, el
+de adelante cae de boca y el de atrás se tropieza con él; de frente, a más velocidad los dos se
+van al piso; de costado, un hombrazo que hace girar al otro. Los pies que se traban en un
+cadáver o una caja tropiezan.
 
 ### 3. Navegación (`src/game/nav.js`)
 
@@ -174,17 +183,31 @@ el flujo pasa por encima de escritorios y mesas y los zombis los trepan en vez d
 
 ### 4. La horda (`src/game/zombie.js`, `src/game/game.js`)
 
-| Tipo | Velocidad | Rasgo |
-|---|---|---|
-| caminante | 0.9 a 1.5 m/s | brazos extendidos; se lanza al trote los últimos 5 m si te ve |
-| trotador | 2.0 a 2.7 m/s | la mayoría de la horda desde la oleada 2 |
-| corredor | 3.4 a 4.2 m/s | bombea los brazos, liviano, se estrella contra todo |
-| bruto | 0.8 a 1.05 m/s | 1.8 de masa, resiste 2.6 veces más, tumba al jugador |
+Estilo Left 4 Dead: **todos corren** cuando te persiguen, cada uno a su manera.
 
-Estados: dormido, alerta, persecución (flujo más separación entre cuerpos), embestida. Los
-cuerpos lejos del jugador se saltan las pasadas de colisión de huesos (`lod`). Desde la primera
-oleada hay **estampidas**: un grupo de corredores entra junto por una puerta cada 14 a 34 s. La
-mezcla de tipos crece con la oleada: más corredores, brutos desde la cuarta.
+| Tipo | Deambulando | Persiguiendo | Rasgo |
+|---|---|---|---|
+| caminante | 0.35 a 0.7 m/s | 2.6 a 3.3 m/s | arrastra los pies hasta que te ve |
+| trotador | 0.45 a 0.85 m/s | 3.0 a 3.7 m/s | la mayoría de la horda desde la oleada 2 |
+| corredor | 0.55 a 1.0 m/s | 3.7 a 4.6 m/s | liviano, se estrella contra todo, tacle |
+| bruto | 0.35 a 0.55 m/s | 1.7 a 2.2 m/s | 1.8 de masa, resiste 2.6 veces más, mazazo que tumba |
+
+Estados: dormido (deambula, o descansa sentado, arrodillado o tirado en el piso), alerta (te
+vio, te oyó o le pegaste: se da vuelta, medio segundo de reacción, y arranca), persecución
+(flujo lejos, directo cerca, separación entre cuerpos y flanqueo para rodearte), ataque.
+
+| Ataque | Quién | Qué hace |
+|---|---|---|
+| manotazo derecho o izquierdo | todos | empujón |
+| doble manotazo | todos | empujón fuerte |
+| agarrón | caminante, trotador | te frena un instante |
+| mordida | todos | la cabeza va al cuello |
+| mazazo | bruto | te tumba |
+| tacle | corredor | se tira de cabeza: los dos al piso |
+
+Los cuerpos lejos del jugador se saltan las pasadas de colisión de huesos (`lod`). Desde la
+primera oleada hay **estampidas**: un grupo de corredores entra junto por una puerta cada 14 a
+34 s. Cada oleada deja además unos dormidos por los rincones.
 
 ### 5. Props y cadáveres (`src/game/props.js`)
 
@@ -212,8 +235,9 @@ hueso tiene puntos de vida propios; sólo escopeta y fusil llegan a cortar un mi
 Es un ragdoll más, con el yaw bloqueado al mouse y los brazos en modo "apuntar". Camina a 3.6
 m/s, corre a 5.6, agachado a la mitad. Corriendo sin disparar el arma baja y los brazos bombean;
 al primer tiro vuelve al frente. Retroceso y recarga mueven las manos por física, no por clip.
-Empujón para sacarse zombis de encima, vida que regenera si lo dejan tranquilo, y muere como
-todos: los músculos se apagan.
+Un manotazo lo hace tambalear con el torso plegado; un mazazo o un tacle lo tiran y tiene que
+levantarse. Empujón para sacarse zombis de encima, vida que regenera si lo dejan tranquilo, y
+muere como todos: los músculos se apagan.
 
 ### 8. Render (`src/render/`)
 
@@ -242,7 +266,9 @@ index.html                 HUD, menús, importmap
 src/main.js                arranque: canvas, renderer, audio, bucle
 src/core/                  util (rng, clamp, ángulos), input
 src/phys/world.js          motor XPBD
+src/phys/skeleton.js       índices de partícula y pose de referencia
 src/phys/ragdoll.js        ragdoll activo: músculos PD, raíz virtual, marcha IK, estados, reacciones
+src/phys/moves.js          poses, caídas, levantadas, muertes, sacudones, ataques, tics, estilos
 src/game/level.js          constructor de lugares y la oficina (hall, oficina abierta, dos salas,
                            pasillo, cubículos, cocina; 4 puertas)
 src/game/nav.js            campo de flujo
@@ -250,7 +276,7 @@ src/game/zombie.js         IA de la horda
 src/game/props.js          props rígidos que duermen
 src/game/weapons.js        armas e hitscan
 src/game/player.js         jugador
-src/game/game.js           oleadas, estampidas, pickups, disparo, cadáveres, HUD
+src/game/game.js           oleadas, estampidas, dormidos, pickups, disparo, cadáveres, HUD
 src/render/                renderer, materiales, cuerpos instanciados, props, FX, modelos, shaders
 src/audio/audio.js         síntesis
 vendor/three/              Three.js r160 y los addons de postprocesado que se usan
@@ -264,7 +290,7 @@ Las suites corren en Node sin navegador y miden comportamiento físico real: dis
 tiempos, velocidades.
 
 ```
-npm test                       # las nueve suites
+npm test                       # las diez suites
 node test/t_world.mjs          # motor: estabilidad, colisiones, expulsión suave, rendimiento
 node test/t_ragdoll.mjs        # ragdoll: de pie, marcha a 1.4 m/s, muerte, desmembrado, 40 cuerpos
 node test/t_nav.mjs            # campo de flujo, muebles trepables
@@ -274,13 +300,17 @@ node test/t_horde.mjs          # horda + armas + jugador, perforación determini
 node test/t_stampede.mjs       # choques a la carrera, tropezones, marchas, pasos laterales
 node test/t_hits.mjs           # reacción a los tiros por dirección, zona y momento
 node test/t_anim.mjs           # trepar, agacharse, aterrizar, inclinarse, brazos al caer
+node test/t_moves.mjs          # el catálogo: cada levantada, caída, muerte, sacudón, ataque, tic,
+                               # estilo y descanso, uno por uno (85 pruebas)
 ```
 
-Ejemplos de lo que se comprueba: que un corredor contra una pared cae y está de pie de nuevo a
-los 2 s; que una escopeta de frente lo tira de espaldas y por la espalda de boca; que la mano de
-un brazo baleado cae; que el pecho retrocede con cada tiro; que al arrancar a correr el torso se
-inclina con más de 2.5 m/s² de aceleración medida; que un zombi sube a un escritorio con los dos
-pies y baja del otro lado.
+Ejemplos de lo que se comprueba: que las quince levantadas terminan de pie desde su pose exacta
+de partida; que cada caída aterriza como dice (de espaldas boca arriba, de boca boca abajo, de
+costado de costado) y que el cuerpo se levanta después; que un tiro de pistola lo hace
+tambalear más de 25 cm y que tres segundos después sigue ahí; que un tiro en el hombro lo hace
+girar; que diez corredores con diez estilos corren todos a más de 3 m/s sin caerse y con los
+brazos a alturas distintas; que un caminante alertado corre a más de 2.3 m/s; que un corredor
+dormido en el piso se levanta y llega.
 
 Los umbrales de rendimiento se miden con la CPU libre: con el juego corriendo en Chrome al
 mismo tiempo fallan por contención, no por el código.
@@ -296,8 +326,13 @@ node test/browser_probe.mjs --all --runners --hit --player   # fps por calidad, 
 
 - **No hay animación aparte de la física.** Cambia la fuerza, no el esqueleto. Cualquier golpe,
   tiro, empujón o caída se compone solo con la marcha, porque son la misma cosa.
-- **Amortiguación crítica** en los músculos. Es la diferencia entre un maniquí y un cuerpo.
-- **Inercia en la velocidad y lean por esfuerzo**, para que arrancar, frenar y girar se vean.
+- **Los movimientos son poses, no clips.** Una levantada son seis poses encadenadas y un perfil
+  de músculo; la física decide el camino entre una y otra. Por eso se pueden tener quince sin
+  capturar nada y por eso chocan con lo que tienen alrededor.
+- **Amortiguación crítica** en los músculos, y **ninguna** cayendo. Es la diferencia entre un
+  maniquí y un cuerpo, y entre un golpe que se siente y uno que se anula.
+- **Inercia en la velocidad, lean por esfuerzo y tambaleo con pasos**, para que arrancar,
+  frenar, girar y recibir un tiro se vean.
 - **La raíz nunca cruza paredes ni entra en otro cuerpo.** Sin eso los músculos empujaban el
   cuerpo a través de las cosas y las hordas se fundían en un solo bulto.
 - **Los huesos también chocan**, no sólo las partículas. De ahí que un cuerpo quede colgado de

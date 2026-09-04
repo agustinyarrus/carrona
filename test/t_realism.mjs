@@ -4,6 +4,7 @@ import { PhysWorld } from '../src/phys/world.js';
 import { Ragdoll, HEAD, NECK, CHEST, HIP, SHL, SHR, KNL, KNR, FTL, FTR, ELL, ELR, BONES, NB } from '../src/phys/ragdoll.js';
 import { PropBox, PropSystem } from '../src/game/props.js';
 import { makeRng } from '../src/core/util.js';
+import { WALK_STYLES, RUN_STYLES } from '../src/phys/moves.js';
 
 let fails = 0;
 const ok = (name, cond, extra = '') => {
@@ -34,7 +35,8 @@ const bonesInside = (w, B, box, tol = 0.03) => {
   const desk = w.boxes[w.addBox(0, 0.37, 1.05, 0.8, 0.37, 0.42)];   // tapa a 0.74 m, 84 cm de fondo
   w.buildStaticIndex();
   const rng = makeRng(2);
-  const B = new Ragdoll(w, { x: 0, z: 0.35, yaw: 0, rng });
+  // estilo fijo: la pose inicial decide cómo cae el cuerpo sobre la tapa
+  const B = new Ragdoll(w, { x: 0, z: 0.35, yaw: 0, rng, walkStyle: WALK_STYLES[0], runStyle: RUN_STYLES[0] });
   run(w, 0.5);
   B.kill();
   // lo empujan hacia adelante sobre el escritorio
@@ -57,11 +59,12 @@ const bonesInside = (w, B, box, tol = 0.03) => {
   const B = new Ragdoll(w, { x: 0, z: 0.3, yaw: 0, rng });
   run(w, 0.5);
   B.knockback(0, 1, 3.0, 0.5);
-  run(w, 3);
+  let fellW = false;
+  run(w, 3, () => { if (!B.upright) fellW = true; });
   let maxZ = -9; for (let i = 0; i < 16; i++) maxZ = Math.max(maxZ, B.pz(i));
   ok('ninguna partícula pasó la pared', maxZ < 1.5 - 0.15 + 0.02, `z máx=${maxZ.toFixed(2)}`);
   ok('ningún hueso quedó adentro de la pared', bonesInside(w, B, wall) === 0);
-  ok('el empujón lo tiró o lo estrelló', !B.upright || B.z > 0.9, `upright=${B.upright} z=${B.z.toFixed(2)}`);
+  ok('el empujón lo tiró o lo estrelló', fellW || !B.upright || B.z > 0.9, `cayó=${fellW} upright=${B.upright} z=${B.z.toFixed(2)}`);
   ok('sin NaN', nanFree(w));
 }
 
@@ -73,7 +76,7 @@ const bonesInside = (w, B, box, tol = 0.03) => {
   run(w, 0.5);
   B.knockback(1, 0, 3.2, 0.25);
   let downAt = null, upAgainAt = null, minMuscle = 1, upStreak = 0;
-  run(w, 5, (t) => {
+  run(w, 7, (t) => {
     if (!B.upright && downAt === null) downAt = t;
     // "de pie" de verdad = erguido y estable medio segundo (un tumbo no cuenta)
     if (downAt !== null && upAgainAt === null) {
@@ -81,10 +84,10 @@ const bonesInside = (w, B, box, tol = 0.03) => {
       if (B.upright && B.py(HEAD) > 1.3) { upStreak += DT; if (upStreak > 0.5) upAgainAt = t - 0.5; } else upStreak = 0;
     }
   });
-  ok('el golpe lo tira', downAt !== null && downAt < 0.8, `cayó a t=${downAt?.toFixed(2)}`);
+  ok('el golpe lo tira', downAt !== null && downAt < 1.2, `cayó a t=${downAt?.toFixed(2)}`);
   ok('tirado, los músculos casi se apagan', minMuscle < 0.05, `mínimo ${minMuscle.toFixed(3)}`);
   ok('se queda en el piso al menos 0.8 s', upAgainAt === null || upAgainAt - downAt > 0.8, `arriba a t=${upAgainAt?.toFixed(2)}`);
-  ok('y se vuelve a parar antes de los 5 s', upAgainAt !== null, `arriba a t=${upAgainAt?.toFixed(2)}`);
+  ok('y se vuelve a parar antes de los 7 s (levantada real)', upAgainAt !== null, `arriba a t=${upAgainAt?.toFixed(2)}`);
   ok('termina de pie y erguido', B.upright && B.py(HEAD) > 1.5, `cabeza=${B.py(HEAD).toFixed(2)}`);
 }
 
@@ -101,8 +104,8 @@ const bonesInside = (w, B, box, tol = 0.03) => {
   const m0 = A.muscleGlobal;
   run(w, 0.15);
   ok('mientras muere los músculos bajan', A.muscleGlobal < m0 && !A.dead, `${m0.toFixed(2)} → ${A.muscleGlobal.toFixed(2)}`);
-  run(w, 0.3);
-  ok('a los 0.45 s está muerto', A.dead);
+  run(w, 2.4);
+  ok('antes de los 2.6 s está muerto (murió con una secuencia)', A.dead, A.lastFall);
   run(w, 2.5);
   ok('los dos terminan en el piso', A.py(HEAD) < 0.35 && C.py(HEAD) < 0.35, `${A.py(HEAD).toFixed(2)} / ${C.py(HEAD).toFixed(2)}`);
 }

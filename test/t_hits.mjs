@@ -2,6 +2,8 @@
 import { PhysWorld } from '../src/phys/world.js';
 import { Ragdoll, HEAD, CHEST, HIP, HAL, HAR, ELL, B_SPINE, B_SKULL, B_UARML, B_THIGHL, B_SHINR } from '../src/phys/ragdoll.js';
 import { makeRng } from '../src/core/util.js';
+import { RUN_STYLES, WALK_STYLES } from '../src/phys/moves.js';
+const REACH = { walkStyle: WALK_STYLES[4], runStyle: RUN_STYLES[3] };   // brazos 'reach': manos a ~1.3 m
 
 let fails = 0;
 const ok = (name, cond, extra = '') => {
@@ -61,7 +63,7 @@ const world = () => { const w = new PhysWorld(); w.groundHX = 30; w.groundHZ = 3
 // ── 4. brazo baleado: cuelga y después vuelve ───────────────────────────────
 {
   const w = world();
-  const B = new Ragdoll(w, { x: 0, z: 0, yaw: 0, rng: makeRng(3) });   // brazos 'reach': manos a ~1.3 m
+  const B = new Ragdoll(w, { x: 0, z: 0, yaw: 0, rng: makeRng(3), ...REACH });
   run(w, 1);
   const hand0 = B.py(HAL);
   B.hit(B_UARML, 0.5, 30, [0, 0, -6]);

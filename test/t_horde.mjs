@@ -81,7 +81,7 @@ const FWD = { x: 0, z: -1 }, RGT = { x: 1, z: 0 };
   step(w, zm, P, hooks, 5, () => P.update(DT, idleInput(P), FWD, RGT));
   ok('dormido sin línea de vista se queda deambulando', Z.state === 'idle' && Math.hypot(Z.x + 6, Z.z - 6) < 4, `estado=${Z.state}`);
   zm.alertAll(P.x, P.z, 26);
-  ok('el ruido lo pone en persecución', Z.state === 'chase');
+  ok('el ruido lo pone en persecución', Z.state === 'chase' || Z.state === 'react', Z.state);
   step(w, zm, P, hooks, 20, () => P.update(DT, idleInput(P), FWD, RGT));
   ok('… y llega', Math.hypot(Z.x - P.x, Z.z - P.z) < 3.5, `d=${Math.hypot(Z.x - P.x, Z.z - P.z).toFixed(1)}`);
 }

@@ -152,7 +152,7 @@ const runner = (w, x, z, rng) => new Ragdoll(w, { x, z, yaw: 0, stride: 0.32, ar
   let fellB = false;
   run(w, 1.5, () => { if (!B.upright) fellB = true; });
   ok('la escopeta a quemarropa lo tira', fellB, `upright=${B.upright}`);
-  run(w, 4);
+  run(w, 6.5);
   ok('se levanta después', B.upright && B.py(HEAD) > 1.4, `cabeza=${B.py(HEAD).toFixed(2)}`);
   ok('sin NaN', nanFree(w));
 }

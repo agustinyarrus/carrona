@@ -1,6 +1,7 @@
 // Sonda rápida contra el Chrome ya abierto (puerto 9333): mide fps por calidad
 // y saca una captura. Uso: node test/browser_probe.mjs
 import fs from 'node:fs';
+fs.mkdirSync('shots', { recursive: true });
 import path from 'node:path';
 const PORT = 9333, URL = 'http://127.0.0.1:8765/';
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
