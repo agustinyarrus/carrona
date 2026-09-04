@@ -11,49 +11,33 @@
 //  El músculo es un controlador PD (posición + amortiguación de velocidad),
 //  no un resorte: por eso una fuerza baja no oscila y un caído no "flota".
 //
-//  Lo que lo hace un ragdoll de verdad todo el tiempo:
-//   · cada tiro es un sacudón físico (limp corto) antes de que los músculos
-//     vuelvan a tomar el control;
-//   · un cuerpo que corre y se estrella (pared, mueble, otro cuerpo) pierde el
-//     control, se estrella con su inercia real, cae y se levanta;
-//   · si lo empujan fuerte (multitud, escopeta, empujón) se cae;
-//   · si los pies se traban en algo bajo mientras el torso sigue, tropieza;
-//   · tirado queda aturdido ~1 s y se levanta en ~1 s con los músculos
-//     subiendo en curva.
+//  Sobre eso corre una máquina de estados con movimientos (moves.js):
+//     up       → marcha procedural con estilo propio + overlays (sacudones
+//                por tiro, manotazos, tics) + tambaleo con pasos reales
+//     falling  → una CAÍDA elegida por causa y ángulo (sentarse de espaldas,
+//                de tabla, de boca, de rodillas, de costado, girando,
+//                desplomarse, volando, voltereta, rebote contra la pared…)
+//     down     → tirado, física pura, aturdido
+//     rising   → una LEVANTADA elegida por cómo quedó (boca arriba, boca
+//                abajo, de costado, sentado, arrodillado) y por el tipo de
+//                cuerpo (el corredor se levanta de un salto, el bruto se
+//                arrastra)
+//     rest     → dormido en el piso o sentado, hasta que algo lo despierta
+//     dying    → una MUERTE (se desploma, camina herido, cae de rodillas…)
 //
 //  La marcha es procedural y mezcla caminar / trotar / correr según la
 //  velocidad real; la fase avanza con la distancia recorrida, así los pies no
 //  patinan. El paso va en la dirección del movimiento (pasos laterales si
-//  el cuerpo mira a otro lado, como el jugador apuntando).
+//  el cuerpo mira a otro lado, como el jugador apuntando, o hacia atrás
+//  cuando un tiro lo hace tambalear).
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { CT_DIST, CT_MIN, CT_MAX, PF_GROUND, PF_HIT } from './world.js';
 import { clamp, clamp01, lerp, angDelta, TAU } from '../core/util.js';
+import { NP, POSE, HEAD, NECK, CHEST, SHL, SHR, ELL, ELR, HAL, HAR, HIP, HPL, HPR, KNL, KNR, FTL, FTR } from './skeleton.js';
+import { SEQ, OVER, getUpsFor, pickWeighted, rotY, RUN_STYLES, WALK_STYLES, IDLE_OVERLAYS } from './moves.js';
 
-// ── índices de partícula ─────────────────────────────────────────────────────
-export const HEAD = 0, NECK = 1, CHEST = 2, SHL = 3, SHR = 4, ELL = 5, ELR = 6,
-  HAL = 7, HAR = 8, HIP = 9, HPL = 10, HPR = 11, KNL = 12, KNR = 13, FTL = 14, FTR = 15;
-export const NP = 16;
-
-// ── pose de referencia, de pie, en metros. Origen en el piso, entre los pies ──
-export const POSE = new Float32Array([
-  0.000, 1.720, 0.000,   // head
-  0.000, 1.550, 0.000,   // neck
-  0.000, 1.320, 0.000,   // chest
-  -0.190, 1.450, 0.000,  // shoulder L
-  0.190, 1.450, 0.000,   // shoulder R
-  -0.225, 1.145, 0.020,  // elbow L
-  0.225, 1.145, 0.020,   // elbow R
-  -0.245, 0.865, 0.055,  // hand L
-  0.245, 0.865, 0.055,   // hand R
-  0.000, 0.960, 0.000,   // hip (raíz)
-  -0.110, 0.925, 0.000,  // hip L
-  0.110, 0.925, 0.000,   // hip R
-  -0.120, 0.520, 0.010,  // knee L
-  0.120, 0.520, 0.010,   // knee R
-  -0.120, 0.062, 0.055,  // foot L  (apoyado: 13 mm por debajo del radio,
-  0.120, 0.062, 0.055,   // foot R   así el pie PRESIONA el piso y agarra)
-]);
+export { NP, POSE, HEAD, NECK, CHEST, SHL, SHR, ELL, ELR, HAL, HAR, HIP, HPL, HPR, KNL, KNR, FTL, FTR };
 
 // masa (kg) y radio de colisión (m) por partícula
 const MASS = new Float32Array([5.0, 2.0, 15.0, 3.0, 3.0, 2.0, 2.0, 1.5, 1.5, 13.0, 3.0, 3.0, 3.5, 3.5, 2.0, 2.0]);
@@ -125,14 +109,21 @@ const RANGE = [
   [FTL, CHEST, 0.45, CT_MIN], [FTR, CHEST, 0.45, CT_MIN],
 ];
 
+// parámetros de estilo que se mezclan entre caminar y correr según la marcha
+const STYLE_LERP = ['lean', 'hunch', 'headDown', 'zigzag', 'shoulder', 'crouchRun', 'reachHi', 'strideMul', 'bobMul', 'lift', 'stomp'];
+// rasgos que vienen del estilo de caminar (o del azar si el estilo no los fija)
+const STYLE_TRAIT = ['jitter', 'lurch', 'limp', 'sway', 'wobble', 'headTilt', 'dragLeg'];
+
 let NEXT_GROUP = 1;
 const _out = {};
+const bell = (u, peak = 0.25) => u < peak ? u / peak : Math.max(0, 1 - (u - peak) / (1 - peak));
 
 export class Ragdoll {
   /**
    * @param {PhysWorld} world
    * @param {object} opt  {x,y,z,yaw,scale,massScale,toughness,armMode,stride,stiffness,
-   *                       maxMuscleSpeed,isPlayer,lockYaw,staggerScale,rng}
+   *                       maxMuscleSpeed,isPlayer,lockYaw,staggerScale,rng,kind,
+   *                       runStyle,walkStyle}
    */
   constructor(world, opt = {}) {
     const w = world;
@@ -145,6 +136,7 @@ export class Ragdoll {
     this.dead = false;
     this.deadT = 0;
     this.isPlayer = !!opt.isPlayer;
+    this.kind = opt.kind ?? (this.isPlayer ? 'player' : 'walker');   // para sortear movimientos
     this.lod = 0;
 
     const S = this.scale;
@@ -205,9 +197,9 @@ export class Ragdoll {
     this.maxMuscleSpeed = opt.maxMuscleSpeed ?? 9;
 
     // ── locomoción ──────────────────────────────────────────────────────────
-    this.phase = (this.rng ? this.rng() : Math.random()) * TAU;
+    const R = this.rng || Math.random;
+    this.phase = R() * TAU;
     this.stride = opt.stride ?? 0.24;
-    this.armMode = opt.armMode ?? 'reach';
     this.speed = 0;
     this.wantX = 0; this.wantZ = 0;      // dirección deseada, normalizada
     this.wantSpeed = 0;                  // velocidad pedida por la IA/el jugador
@@ -220,7 +212,7 @@ export class Ragdoll {
     this.lockYaw = !!opt.lockYaw;
     this.lunge = 0;
     this.gait = 0;                       // 0 camina … 1 corre (mezcla real)
-    this.idleT = (this.rng ? this.rng() : Math.random()) * 10;
+    this.idleT = R() * 10;
     // sólo para 'aim' (el jugador): 1 apuntando / 0 corriendo; retroceso; recarga
     this.aimBlend = 1; this.recoil = 0; this.reloadT = 0;
     // heridas: cada miembro tiene un "piso" de músculo (baja con el daño, para
@@ -230,6 +222,7 @@ export class Ragdoll {
     this.limbMul = new Float32Array(NP).fill(1);
     this.legBuckle = [0, 0]; this.armLimp = [0, 0];
     this.hitJ = 0;          // momento recibido recientemente (decae)
+    this.lastHitX = 0; this.lastHitZ = 1;
     // trucos de Overgrowth: inclinarse hacia la aceleración, mirar al objetivo,
     // prepararse con los brazos al caer; agacharse; trepar; aterrizar flexionando
     this.accX = 0; this.accZ = 0; this._vpx = 0; this._vpz = 0;
@@ -240,48 +233,67 @@ export class Ragdoll {
     this.landCrouch = 0; this.airT = 0;
 
     // ── estados físicos ─────────────────────────────────────────────────────
+    this.state = 'up';     // up · falling · down · rising · rest
+    this.seq = null;       // secuencia en curso (caída, levantada, muerte, descanso)
+    this.overlay = null;   // sacudón / manotazo encima de la marcha
+    this.idleOv = null;    // tic de quieto (bucle)
+    this.idleNext = 1 + R() * 3;
     this.downT = 0;        // cuánto lleva tirado
+    this.dazeT = 0;        // cuánto tiene que quedarse tirado antes de levantarse
     this.upT = 1;          // cuánto lleva erguido
-    this.dying = 0;        // muerte lenta: cuánto falta
-    this.limp = 0;         // segundos con los músculos apagados (golpe, choque)
-    this.riseBlend = 0; this.riseFrom = 1;
+    this.dying = 0;        // > 0 mientras corre una secuencia de muerte
+    this.limp = 0;         // segundos con los músculos apagados (golpe corto)
+    this.dormant = false;  // dormido: no se levanta hasta que lo despierten
+    this.riseTries = 0;
     this.tripT = 0; this.tripped = 0;
     this.blockT = 0; this.slams = 0; this.slamCool = 0; this.bumpCool = 0; this.bumps = 0;
+    this.falls = 0; this.getUps = 0; this.lastFall = ''; this.lastGetUp = ''; this.lastFlinch = '';
     this.canTrip = !this.isPlayer;
     this.canSlam = true;
+    // tambaleo: pasos reales en la dirección del empujón
+    this.stumbleT = 0; this.stumbleDur = 0; this.stumbleX = 0; this.stumbleZ = 1; this.stumbleV = 0; this.stumbles = 0;
+    this.spin = 0;         // giro sobre sí mismo (rad/s) por un tiro en el hombro, decae
 
     // ── raíz virtual ────────────────────────────────────────────────────────
     this.rootX = x; this.rootZ = z;
+    this.rootVX = 0; this.rootVZ = 0;
     this.leash = 0.30;
     this._hx = x; this._hz = z;          // cadera del frame anterior
 
-    // ── personalidad ────────────────────────────────────────────────────────
-    const R = this.rng || Math.random;
+    // ── personalidad + estilo de marcha ─────────────────────────────────────
+    const runS = opt.runStyle ?? RUN_STYLES[Math.floor(R() * RUN_STYLES.length)];
+    const walkS = opt.walkStyle ?? WALK_STYLES[Math.floor(R() * WALK_STYLES.length)];
+    this.runStyle = runS; this.walkStyle = walkS;
     this.pers = {
       phaseOff: R() * TAU,
-      lean: (R() - 0.5) * 0.16,
-      sway: 0.6 + R() * 0.9,
-      headTilt: (R() - 0.5) * 0.30,
+      lean: (R() - 0.5) * 0.10,
+      sway: walkS.sway ?? (0.6 + R() * 0.9),
+      headTilt: walkS.headTilt ?? (R() - 0.5) * 0.30,
       headBob: 0.5 + R(),
-      limp: R() < 0.35 ? 0.35 + R() * 0.4 : 1,   // una pierna con menos amplitud
+      limp: walkS.limp ?? (R() < 0.3 ? 0.4 + R() * 0.4 : 1),   // una pierna con menos amplitud
       limpSide: R() < 0.5 ? 0 : 1,
       armHi: (R() - 0.5) * 0.22,
       armSpread: 0.8 + R() * 0.5,
-      wobble: 0.4 + R() * 1.2,
-      lurch: R() < 0.4 ? 0.3 + R() * 0.5 : 0,      // cadencia irregular
-      hunch: R() * 0.08,                          // encorvado
-      strideMul: 0.85 + R() * 0.3,                // zancada propia
-      bobMul: 0.7 + R() * 0.7,                    // cuánto sube y baja
+      wobble: walkS.wobble ?? (0.4 + R() * 1.2),
+      lurch: walkS.lurch ?? (R() < 0.3 ? 0.3 + R() * 0.5 : 0),   // cadencia irregular
+      hunch: R() * 0.04,
       armAsym: R() < 0.3 ? (R() < 0.5 ? 0 : 1) : -1,   // un brazo más vago
-      jitter: R() * 0.6,                          // irregularidad del ciclo
+      jitter: walkS.jitter ?? R() * 0.6,
+      dragLeg: walkS.dragLeg ?? 0,
+      w: walkS, r: runS,
     };
+    // el jugador apunta; el resto lleva los brazos según su estilo
+    this.armMode = opt.armMode ?? 'reach';
+    this.styledArms = this.armMode !== 'aim';
 
     // marco del cuerpo (se recalcula 1× por frame)
     this.fx = 0; this.fy = 0; this.fz = 1;
     this.rx = 1; this.ry = 0; this.rz = 0;
     this.ux = 0; this.uy = 1; this.uz = 0;
 
+    this._dtLast = 0;
     this.target = new Float32Array(NP * 3);
+    this._tA = new Float32Array(NP * 3); this._tB = new Float32Array(NP * 3); this._tU = new Float32Array(NP * 3);
     this._syncTarget(0);
 
     w.bodies.push(this);
@@ -308,12 +320,17 @@ export class Ragdoll {
     const dy = this.py(CHEST) - this.py(HIP);
     return dy > 0.20 * this.scale;
   }
-  /** ¿Tiene el control de su cuerpo? (no está muerto, tirado ni sacudido) */
-  get inControl() { return !this.dead && this.dying <= 0 && this.limp <= 0 && this.downT <= 0; }
+  /** ¿Tiene el control de su cuerpo? (no está muerto, cayendo, tirado, levantándose ni tambaleando) */
+  get inControl() { return !this.dead && this.dying <= 0 && this.limp <= 0 && this.state === 'up' && this.stumbleT <= 0; }
+  /** Nombre del movimiento en curso (para depurar / pruebas). */
+  get moveName() { return this.seq ? this.seq.def.name : (this.stumbleT > 0 ? 'stumble' : (this.overlay ? this.overlay.def.name : '')); }
+  /** Parámetro de estilo mezclado caminar→correr según la marcha. */
+  _sp(key, def = 0) { const w = this.pers.w[key], r = this.pers.r[key]; return lerp(w ?? def, r ?? def, this.gait); }
 
   // ═══ actualización por frame (no por substep) ═════════════════════════════
   update(dt) {
     const w = this.world;
+    this._dtLast = dt;
 
     // — marco del cuerpo, de las propias partículas —
     let ux = this.px(CHEST) - this.px(HIP), uy = this.py(CHEST) - this.py(HIP), uz = this.pz(CHEST) - this.pz(HIP);
@@ -333,11 +350,6 @@ export class Ragdoll {
     this.fz = rx * uy - ry * ux;
 
     if (this.dead) { this.deadT += dt; return; }
-    if (this.dying > 0) {
-      this.dying -= dt;
-      this.wantSpeed = 0;
-      if (this.dying <= 0) { this._die(); return; }
-    }
 
     const hipP = this.p[HIP];
     const hx = w.px[hipP], hz = w.pz[hipP];
@@ -361,6 +373,7 @@ export class Ragdoll {
     if (this.lunge > 0) this.lunge = Math.max(0, this.lunge - dt);
     if (this.recoil > 0) this.recoil = Math.max(0, this.recoil - dt * 7);
     this.hitJ *= Math.exp(-dt * 6);
+    if (this.spin) { if (!this.lockYaw) this.yaw += this.spin * dt; this.spin *= Math.exp(-dt * 5); if (Math.abs(this.spin) < 0.05) this.spin = 0; }
 
     // — heridas: los miembros recuperan fuerza hasta su piso; pierna doblada, brazo colgando —
     const mus = this.muscle, floor = this.muscleFloor, LM = this.limbMul;
@@ -381,26 +394,30 @@ export class Ragdoll {
       }
     }
 
+    // — la máquina de estados: caídas, tirado, levantadas, descanso —
+    this._stateStep(dt);
+    const up = this.state === 'up';
+    const control = up && this.limp <= 0;
+    const stumbling = this.stumbleT > 0;
+    if (this.seq) {
+      const S = this.seq;
+      if (S.legs < 0.999) { LM[HPL] *= S.legs; LM[HPR] *= S.legs; LM[KNL] *= S.legs; LM[KNR] *= S.legs; LM[FTL] *= S.legs; LM[FTR] *= S.legs; }
+      if (S.arms < 0.999) { LM[ELL] *= S.arms; LM[ELR] *= S.arms; LM[HAL] *= S.arms; LM[HAR] *= S.arms; }
+    }
+
     // — orientación: girar hacia donde quiere ir —
-    if (!this.lockYaw && this.wantSpeed > 0.05) {
+    if (!this.lockYaw && this.wantSpeed > 0.05 && control && !stumbling) {
       const goal = Math.atan2(this.wantX, this.wantZ);
       const turn = (this.crawling ? 2.2 : (4.5 + this.gait * 2.5)) * dt;
       this.yaw += clamp(angDelta(this.yaw, goal), -turn, turn);
     }
 
-    // — la raíz avanza; la correa la ata al cuerpo real —
-    //   La raíz NO entra en otro cuerpo que esté de pie: si no, dos cuerpos
-    //   cinemáticos se funden y pasan uno a través del otro. Así un corredor
-    //   que embiste a otro se frena (y si venía rápido, se estrella), y una
-    //   fila de zombis se embotella en vez de superponerse. Los tirados se
-    //   pisan o se tropiezan, no bloquean.
-    const control = this.limp <= 0 && this.downT <= 0;
     this.rootBlocked = false;
     // — velocidad con inercia: no se pasa de 0 a tope en un frame. Acelera a
     //   ~9 m/s² y frena a ~14: arrancar y parar toman tiempo (menos robótico) y
     //   dejan ver la inclinación. curSpeed es la que de verdad mueve al cuerpo. —
     {
-      const tgt = this.wantSpeed;
+      const tgt = control && !stumbling ? this.wantSpeed : 0;
       const rate = (tgt > this.curSpeed ? 9 : 14) * dt;
       this.curSpeed += clamp(tgt - this.curSpeed, -rate, rate);
     }
@@ -418,14 +435,26 @@ export class Ragdoll {
     // avance se reparte por substep en preSolve (movimiento continuo: el
     // músculo no tiene que alcanzar un objetivo que salta 2 cm por frame).
     this.rootVX = 0; this.rootVZ = 0;
-    if (this.wantSpeed > 0.01 && control && !this.vault) {
+    if (stumbling && up) {
+      // — TAMBALEO: la raíz se va con el empujón y las piernas la siguen a
+      //   los pasos. La velocidad decae; queda DESPLAZADO (no vuelve) —
+      this.stumbleT -= dt;
+      const v = this.stumbleV * clamp01(this.stumbleT / this.stumbleDur);
+      this.rootVX = this.stumbleX * v; this.rootVZ = this.stumbleZ * v;
+      this.curSpeed = v;
+      if (this.stumbleT <= 0) { this.stumbleT = 0; this.curSpeed = 0; }
+    } else if (this.wantSpeed > 0.01 && control && !this.vault) {
       const step = this.curSpeed * dt;
       const nx = this.rootX + this.wantX * step, nz = this.rootZ + this.wantZ * step;
+      // La raíz NO entra en otro cuerpo que esté de pie: si no, dos cuerpos
+      // cinemáticos se funden y pasan uno a través del otro. Así un corredor
+      // que embiste a otro se frena (y si venía rápido, se estrella), y una
+      // fila de zombis se embotella en vez de superponerse.
       const bodies = w.bodies;
       let blocker = null;
       for (let i = 0; i < bodies.length; i++) {
         const o = bodies[i];
-        if (o === this || !o.p || o.dead || o.downT > 0.2 || !o.upright) continue;
+        if (o === this || !o.p || o.dead || o.state !== 'up' || typeof o.knockback !== 'function' || !o.upright) continue;
         const dx = o.x - nx, dz = o.z - nz;
         const rr = 0.42 * (this.scale + o.scale) * 0.5;
         if (dx * dx + dz * dz > rr * rr) continue;
@@ -435,7 +464,6 @@ export class Ragdoll {
       else {
         // bloqueado: seguir a la velocidad del de adelante en su dirección y
         // resbalar por la tangente, como una multitud que se escurre alrededor
-        // (y no una fila clavada)
         let bx = blocker.x - this.rootX, bz = blocker.z - this.rootZ;
         const bl = Math.hypot(bx, bz) || 1; bx /= bl; bz /= bl;
         const dot = this.wantX * bx + this.wantZ * bz;
@@ -445,48 +473,53 @@ export class Ragdoll {
         const follow = Math.min(step, Math.max(0, blocker.wantSpeed || 0) * dt) * Math.max(0, dot);
         this.rootX += this.wantX * follow; this.rootZ += this.wantZ * follow;
         this.rootBlocked = true;
-        // choque a la carrera contra alguien de pie: tropezón mutuo (yo
-        // tambaleo, el otro sale empujado y puede caerse). Una vez por segundo.
+        // choque a la carrera contra alguien de pie: variantes según velocidad
+        // y ángulo — un hombrazo lo hace girar, un choque de frente tira a
+        // los dos, por la espalda el de adelante cae de boca y yo me tropiezo
         if (this.bumpCool > 0) this.bumpCool -= dt;
         if (this.speed > 2.3 && this.bumpCool <= 0 && blocker.inControl) {
           this.bumpCool = 1.0;
-          this.stagger = Math.min(0.9, this.stagger + 0.5);
-          this.limp = Math.max(this.limp, 0.12);
-          blocker.knockback(this.wantX, this.wantZ, 0.6 + 0.26 * this.speed, 0.25);
           this.bumps = (this.bumps || 0) + 1;
+          this._bumpInto(blocker, bx, bz);
         }
       }
     }
     const lx0 = this.rootX - hx, lz0 = this.rootZ - hz;
     const ld = Math.hypot(lx0, lz0);
-    const leash = (this.wantSpeed > 0.01 ? this.leash : this.leash * 3.5) * this.scale;
-    // — empujón externo: si la cadera se fue MUCHO más allá de la correa en
-    //   un solo frame, lo empujaron fuerte (multitud, escopeta) → tambalea o cae
-    if (control && this.upright && ld > leash + 0.07) {
-      const over = ld - leash;
-      this.stagger = Math.min(0.9, this.stagger + over * 2.5);
-      if (over > 0.13) this.limp = Math.max(this.limp, 0.22 + over);
-    }
-    if (ld > leash) {
-      const f = leash / ld;
-      this.rootX = hx + lx0 * f;
-      this.rootZ = hz + lz0 * f;
+    if (up) {
+      const leash = (this.wantSpeed > 0.01 || stumbling ? this.leash : this.leash * 3.5) * this.scale;
+      // — empujón externo: si la cadera se fue MUCHO más allá de la correa en
+      //   un solo frame, lo empujaron fuerte (multitud, escopeta) → tambalea o cae
+      if (control && this.upright && ld > leash + 0.07) {
+        const over = ld - leash;
+        this.stagger = Math.min(0.9, this.stagger + over * 2.5);
+        if (over > 0.16) this.fall('knockback', hx - this.rootX, hz - this.rootZ, 1.2 + over);
+        else if (!stumbling) this.stumble(hx - this.rootX, hz - this.rootZ, 1.2 + over * 4, 0.35);
+      }
+      if (ld > leash) {
+        const f = leash / ld;
+        this.rootX = hx + lx0 * f;
+        this.rootZ = hz + lz0 * f;
+      }
+    } else if (this.state === 'down') {
+      // tirado la raíz va con el cuerpo: nada tira de él
+      this.rootX = hx; this.rootZ = hz;
     }
     // La raíz nunca queda del otro lado de una pared: si no, los músculos
     // tirarían del cuerpo a través de ella (y lo lograrían). Si lo que frena
     // es bajo (escritorio, mesa, caja grande), se trepa.
-    if (!this.vault) {
+    if (!this.vault && up) {
       const rx2 = this.rootX - hx, rz2 = this.rootZ - hz;
       const rd = Math.hypot(rx2, rz2);
       // mira hacia la raíz si está adelantada; si no, hacia donde quiere ir
       let ddx = 0, ddz = 0;
       if (rd > 0.04) { ddx = rx2 / rd; ddz = rz2 / rd; }
+      else if (stumbling) { ddx = this.stumbleX; ddz = this.stumbleZ; }
       else if (this.wantSpeed > 0.05 && control) { ddx = this.wantX; ddz = this.wantZ; }
       if (ddx || ddz) {
         const reach = Math.max(rd, 0.25) + 0.2;
         const tt0 = w.raycastStatic(hx, w.py[hipP], hz, ddx, 0, ddz, reach, _out);
         if (tt0 >= 0 && tt0 < reach) {
-          const box = _out.box;
           if (rd > 0.04) {
             const tt = Math.max(0, tt0 - 0.22);
             this.rootX = hx + ddx * Math.min(tt, rd);
@@ -498,7 +531,7 @@ export class Ragdoll {
       // trepar: un probe BAJO (a la altura de las rodillas) hacia adelante, que
       // sí ve un escritorio o una mesa (el probe de pared va a la altura de la
       // cadera y pasa por encima de los muebles bajos)
-      if (this.autoVault && control && this.upright && this.wantSpeed > 0.4) {
+      if (this.autoVault && control && !stumbling && this.upright && this.wantSpeed > 0.4) {
         const gy = this.groundY > -900 ? this.groundY : 0;
         const t2 = w.raycastStatic(hx, gy + 0.35 * this.scale, hz, this.wantX, 0, this.wantZ, 0.7 * this.scale, _out);
         if (t2 >= 0 && _out.box) this.tryVault(this.wantX, this.wantZ);
@@ -519,7 +552,7 @@ export class Ragdoll {
       const kA = 1 - Math.pow(0.02, dt);
       // sólo cuando trata de moverse: parado y empujado NO se inclina contra el
       // empujón (si no, el músculo lo trae de vuelta y anula el knockback)
-      const moving2 = this.wantSpeed > 0.1 || this.curSpeed > 0.1;
+      const moving2 = control && !stumbling && (this.wantSpeed > 0.1 || this.curSpeed > 0.1);
       const ex = moving2 ? this.wantX * this.wantSpeed - vx : 0;
       const ez = moving2 ? this.wantZ * this.wantSpeed - vz : 0;
       this.accX += (clamp(ex * 4.5, -14, 14) - this.accX) * kA;
@@ -533,19 +566,18 @@ export class Ragdoll {
     // — agacharse (jugador): mezcla suave —
     this.crouch += ((this.wantCrouch ? 1 : 0) - this.crouch) * (1 - Math.pow(0.002, dt));
     // — prepararse al caer: si va de cabeza al piso, los brazos salen a frenar —
-    if (!this.dead && (this.limp > 0 || this.downT > 0)) {
+    const braceOK = !this.seq || this.seq.def.brace !== false;
+    if (!this.dead && braceOK && (this.limp > 0 || this.state === 'falling' || this.state === 'down')) {
       const vyC = w.vy[this.p[CHEST]];
       if (this.brace <= 0 && vyC < -1.0 && this.py(HEAD) < 1.35 && this.py(HEAD) > 0.45) this.brace = 0.5;
     }
+    if (!braceOK) this.brace = 0;
     if (this.brace > 0) this.brace -= dt;
 
     // — ESTRELLARSE: venía corriendo DE VERDAD y de golpe no avanza (pared,
     //   mueble, otro cuerpo). El torso sigue con su inercia, sin músculos.
-    //   Se exige velocidad real (no la deseada), no estar en plena manotada, y
-    //   hay enfriamiento: si no, un cuerpo bloqueado se "estrellaba" 20 veces
-    //   por segundo sumando velocidad y salía volando.
     if (this.slamCool > 0) this.slamCool -= dt;
-    if (this.canSlam && control && this.upright && !this.rootBlocked && this.wantSpeed > 2.0 && this.lunge <= 0 && this.slamCool <= 0 && dt > 0) {
+    if (this.canSlam && control && !stumbling && this.upright && !this.rootBlocked && this.wantSpeed > 2.0 && this.lunge <= 0 && this.slamCool <= 0 && dt > 0) {
       const adv = ((hx - this._hx) * this.wantX + (hz - this._hz) * this.wantZ) / dt;
       if (adv < this.wantSpeed * 0.35 && this.speed > 1.8) this.blockT += dt; else this.blockT = 0;
       if (this.blockT > 0.05) {
@@ -559,7 +591,7 @@ export class Ragdoll {
     //   costado de una caja, un cadáver, la pierna de otro) y queda trabado
     //   atrás mientras el torso sigue. Hace falta el contacto: en piso liso los
     //   pies se atrasan solos al correr y eso no es tropezar.
-    if (this.canTrip && this.wantSpeed > 0.5 && this.upright && control && !this.crawling) {
+    if (this.canTrip && this.wantSpeed > 0.5 && this.upright && control && !stumbling && !this.crawling) {
       let contact = false;
       for (const i of [FTL, FTR, KNL, KNR]) {
         const f = w.pf[this.p[i]];
@@ -568,7 +600,7 @@ export class Ragdoll {
       let lag = 0;
       if (contact) {
         const c0 = Math.cos(this.yaw), s0 = Math.sin(this.yaw);
-        const T = this.target, S = this.scale;
+        const T = this.target;
         const baseY = this.groundY > -900 ? this.groundY : 0;
         for (const f of [FTL, FTR]) {
           const lx = T[f * 3] - T[HIP * 3], lz = T[f * 3 + 2] - T[HIP * 3 + 2];
@@ -582,57 +614,304 @@ export class Ragdoll {
       if (contact && lag > lagThr && hipLag < 0.25 * this.scale) this.tripT += dt; else this.tripT = Math.max(0, this.tripT - dt * 2);
       if (this.tripT > timeThr) {
         this.tripT = 0;
-        this.knockback(this.fx, this.fz, 1.35, 0.15);
         this.tripped++;
+        this.fall('trip', this.fx, this.fz, 0.8 + this.speed * 0.15);
       }
     } else this.tripT = 0;
 
     // — fase del ciclo: avanza con la distancia recorrida, no con el tiempo —
-    const v = Math.max(this.speed, this.wantSpeed * 0.6);
-    this.gait = lerp(this.gait, clamp01((v - 0.7) / 2.3), 1 - Math.pow(0.05, dt));
+    const v = stumbling ? this.curSpeed : Math.max(this.speed, this.wantSpeed * 0.6);
+    this.gait = lerp(this.gait, stumbling ? 0.5 : clamp01((v - 0.7) / 2.3), 1 - Math.pow(0.05, dt));
     // un ciclo cubre 4 zancadas (el pie en apoyo va de +st a -st mientras el
     // cuerpo avanza 2·st, dos veces): así el pie apoyado no patina
-    const st = this.stride * this.scale * lerp(0.8, 2.0, this.gait);
+    const st = this.stride * this.scale * lerp(0.8, 2.0, this.gait) * (stumbling ? 0.7 : 1);
     const strideLen = Math.max(0.12, st * 4);
     let cadence = this.speed / strideLen;
     if (this.pers.lurch && this.gait < 0.5) cadence *= 1 + Math.sin(this.phase * 0.5) * this.pers.lurch * 0.5;
-    const idle = this.wantSpeed > 0.05 ? 0.35 : 0.13;
+    const idle = this.wantSpeed > 0.05 || stumbling ? 0.35 : 0.13;
     this.phase = (this.phase + (cadence + idle) * TAU * dt) % TAU;
     this.idleT += dt;
 
-    // — caído: primero queda tirado (aturdido), después se levanta de a poco —
-    const up = this.upright;
-    this.upT = up ? this.upT + dt : 0;
-    if (!up && !this.crawling) this.downT += dt;
-    else if (this.downT > 0 && (this.upT > 0.3 || this.crawling)) {
-      const daze = this._daze();
-      const tt = this.downT - daze;
-      const r = tt > 0 ? clamp01(tt / 1.3) : 0;
-      this.riseFrom = tt > 0 ? lerp(0.02, 0.9, r * r) : 0.02;
-      this.riseBlend = 0.5;
-      this.downT = 0;
+    // — de pie y se cayó sin director (lo aplastaron, lo pisaron, física pura):
+    //   pasa a tirado y se levantará —
+    this.upT = this.upright ? this.upT + dt : 0;
+    if (up && !this.crawling) {
+      if (!this.upright) { this.downT += dt; if (this.downT > 0.25) this._enterDown(false, 'physics'); }
+      else this.downT = 0;
     }
-    if (this.riseBlend > 0) this.riseBlend -= dt;
+
+    // — tics de quieto (bucle): se sortea uno cada tanto, se apaga al moverse —
+    if (up && !stumbling && this.styledArms && !this.overlay) {
+      if (this.wantSpeed < 0.05 && this.speed < 0.3) {
+        if (!this.idleOv) { this.idleNext -= dt; if (this.idleNext <= 0) { const R = this.rng || Math.random; this.idleOv = { def: OVER[IDLE_OVERLAYS[Math.floor(R() * IDLE_OVERLAYS.length)]], t: 0, k: 1 }; this.idleNext = 2 + R() * 5; } }
+      } else this.idleOv = null;
+    } else this.idleOv = null;
 
     // — músculo global —
     let m = 1;
-    if (this.stagger > 0) m *= lerp(0.22, 1, 1 - clamp01(this.stagger / 0.55));
-    if (this.downT > 0) {
-      const tt = this.downT - this._daze();
-      if (tt < 0) m = 0;                                  // tirado: física pura
-      else { const r = clamp01(tt / 1.3); m *= lerp(0.02, 0.9, r * r); }
-    } else if (this.riseBlend > 0) {
-      m *= lerp(1, this.riseFrom, clamp01(this.riseBlend / 0.5));
+    if (this.seq) {
+      m = this.seq.mus;
+    } else {
+      if (this.stagger > 0) m *= lerp(0.22, 1, 1 - clamp01(this.stagger / 0.55));
+      if (stumbling) m *= 0.85;
+      if (this.state === 'down') m = 0;                     // tirado: física pura
+      if (this.limp > 0) { this.limp -= dt; m = 0; }         // golpe: física pura un instante
+      m *= 1 - this.airborne * 0.55;                         // en el aire no hay de dónde hacer fuerza
     }
-    if (this.dying > 0) m *= Math.pow(clamp01(this.dying / 0.32), 1.5);
-    if (this.limp > 0) { this.limp -= dt; m = 0; }         // golpe / choque: física pura
-    m *= 1 - this.airborne * 0.55;                         // en el aire no hay de dónde hacer fuerza
     this.muscleGlobal = m;
 
     this._syncTarget(dt);
+    // — cayendo o muriendo la pose se ancla al PECHO, no a la cadera: el torso
+    //   vuela con el impulso que recibió y las piernas lo siguen. Anclada a la
+    //   cadera, el músculo tiraba del pecho de vuelta y anulaba el golpe —
+    if (this.state === 'falling' || this.state === 'dying') {
+      // ancla en el CENTRO DE MASA: la pose se arma alrededor de donde está el
+      // cuerpo de verdad, así el músculo da forma sin empujar el conjunto (la
+      // suma de los tirones es cero) y el momento que traía se conserva
+      const T = this.target, c = Math.cos(this.yaw), s = Math.sin(this.yaw);
+      let mx = 0, mz = 0, lx = 0, lz = 0, mt = 0;
+      for (let i = 0; i < NP; i++) {
+        const pi = this.p[i]; if (w.iw[pi] === 0) continue;
+        const mi = MASS[i];
+        mx += w.px[pi] * mi; mz += w.pz[pi] * mi;
+        lx += (T[i * 3] - T[HIP * 3]) * mi; lz += (T[i * 3 + 2] - T[HIP * 3 + 2]) * mi;
+        mt += mi;
+      }
+      if (mt > 0) {
+        mx /= mt; mz /= mt; lx /= mt; lz /= mt;
+        this.rootX = mx - (lx * c + lz * s);
+        this.rootZ = mz - (-lx * s + lz * c);
+      }
+    }
   }
 
-  _daze() { return this.isPlayer ? 0.45 : 0.8 + this.pers.wobble * 0.45; }
+  _daze() {
+    const R = this.rng || Math.random;
+    const base = this.isPlayer ? 0.45 : this.kind === 'runner' ? 0.35 : this.kind === 'brute' ? 1.3 : this.kind === 'jogger' ? 0.6 : 0.9;
+    return base * (0.7 + R() * 0.7) * (1 + this.pers.wobble * 0.15);
+  }
+
+  // ═══ máquina de estados y secuencias ══════════════════════════════════════
+  _stateStep(dt) {
+    const w = this.world;
+    const S = this.seq;
+    if (S) {
+      const def = S.def, keys = def.keys;
+      S.t += dt;
+      // avanzar de clave: al ENTRAR a una clave se aplican su giro de marco y su patada
+      while (S.key + 1 < keys.length && S.t >= keys[S.key + 1].t) {
+        S.key++;
+        const k = keys[S.key];
+        if (S.pendingYaw) { this._reframe(S.pendingYaw); S.pendingYaw = 0; }
+        if (k.kick) this._kick(k.kick);
+        // la clave siguiente pide un giro de marco: se calcula ahora (con el
+        // cuerpo como está) y se aplica cuando se llegue a ella
+        const nk = keys[S.key + 1];
+        S.pendingYaw = nk && nk.yawAdd ? this._yawDelta(nk.yawAdd) : 0;
+      }
+      if (S.key < 0) { S.key = 0; const nk = keys[1]; S.pendingYaw = nk && nk.yawAdd ? this._yawDelta(nk.yawAdd) : 0; if (keys[0].kick) this._kick(keys[0].kick); }
+      const a = keys[S.key], b = keys[Math.min(S.key + 1, keys.length - 1)];
+      const span = Math.max(1e-4, b.t - a.t);
+      const u = b === a ? 1 : clamp01((S.t - a.t) / span);
+      S.u = u;
+      S.mus = lerp(a.mus ?? 1, b.mus ?? 1, u);
+      S.legs = lerp(a.legs ?? 1, b.legs ?? 1, u);
+      S.arms = lerp(a.arms ?? 1, b.arms ?? 1, u);
+      S.fwd = lerp(a.fwd ?? 0, b.fwd ?? 0, u);
+      if (S.fwd) {
+        // la raíz avanza a lo largo de +Z local, sin cruzar paredes
+        const sx = Math.sin(this.yaw), cz = Math.cos(this.yaw);
+        const step = S.fwd * dt;
+        const t = w.raycastStatic(this.rootX, this.py(HIP) + 0.2, this.rootZ, sx, 0, cz, step + 0.35, _out);
+        if (t < 0 || t > step + 0.3) { this.rootX += sx * step; this.rootZ += cz * step; }
+      }
+      // ¿se aquietó? (para cerrar caídas y muertes antes de tiempo)
+      const settled = () => {
+        const vc = Math.hypot(w.vx[this.p[CHEST]], w.vy[this.p[CHEST]], w.vz[this.p[CHEST]]);
+        const vh = Math.hypot(w.vx[this.p[HIP]], w.vy[this.p[HIP]], w.vz[this.p[HIP]]);
+        return vc < 0.5 && vh < 0.5;
+      };
+      if (def.kind === 'fall') {
+        const low = !this.upright || this.py(HEAD) - (this.groundY > -900 ? this.groundY : 0) < 0.9 * this.scale;
+        if (S.t >= def.dur * 1.6 || (S.t >= def.minT && low && settled())) this._enterDown(!!def.quickUp, def.name);
+      } else if (def.kind === 'die') {
+        if (S.t >= def.dur || (S.t >= def.minT && settled())) this._die();
+      } else if (def.kind === 'getup') {
+        if (S.t >= def.dur) {
+          this.seq = null;
+          if (this.upright && this.py(HEAD) - (this.groundY > -900 ? this.groundY : 0) > 1.15 * this.scale) {
+            this.state = 'up'; this.getUps++; this.riseTries = 0; this.downT = 0;
+            this.stagger = Math.min(0.9, this.stagger + 0.25);
+          } else if (++this.riseTries >= 3) {
+            // atascado (abajo de algo): que los músculos lo saquen como puedan
+            this.state = 'up'; this.riseTries = 0; this.downT = 0;
+          } else this._enterDown(true, 'retry');
+        }
+      }
+      // 'rest' no termina solo: lo termina wake()
+      return;
+    }
+    if (this.state === 'down') {
+      this.downT += dt;
+      if (!this.dormant && this.downT >= this.dazeT) this._startGetUp();
+    }
+  }
+
+  /** Giro de marco pedido por una clave: número (radianes) o 'toHead' / 'toFeet'. */
+  _yawDelta(spec) {
+    if (typeof spec === 'number') return spec;
+    // dirección horizontal de la cabeza (cadera → cabeza)
+    let hx = this.px(HEAD) - this.px(HIP), hz = this.pz(HEAD) - this.pz(HIP);
+    const l = Math.hypot(hx, hz);
+    if (l < 0.05) return 0;
+    hx /= l; hz /= l;
+    const goal = spec === 'toHead' ? Math.atan2(hx, hz) : Math.atan2(-hx, -hz);
+    return angDelta(this.yaw, goal);
+  }
+  _reframe(dyaw) {
+    if (!dyaw) return;
+    this.yaw += dyaw;
+    this.rootX = this.x; this.rootZ = this.z;
+  }
+  _kick(list) {
+    const w = this.world, c = Math.cos(this.yaw), s = Math.sin(this.yaw);
+    for (const [i, vx, vy, vz] of list) {
+      const pi = this.p[i];
+      if (w.iw[pi] === 0) continue;
+      w.vx[pi] += vx * c + vz * s; w.vy[pi] += vy; w.vz[pi] += -vx * s + vz * c;
+    }
+  }
+
+  /** Arranca una secuencia (caída, levantada, muerte, descanso). */
+  _playSeq(def, ctx = {}) {
+    this.seq = { def, t: 0, key: -1, u: 0, ctx, mus: def.keys[0].mus ?? 1, legs: def.keys[0].legs ?? 1, arms: def.keys[0].arms ?? 1, fwd: 0, pendingYaw: 0 };
+    this.overlay = null; this.idleOv = null;
+    this.stumbleT = 0; this.limp = 0;
+    this.vault = null; this.lunge = 0;
+    this.wantSpeed = 0; this.curSpeed = 0;
+    if (def.imp) {
+      // impulsos en el marco del empujón: [partícula, a lo largo, arriba, lateral]
+      let dx = ctx.dx ?? this.fx, dz = ctx.dz ?? this.fz;
+      const l = Math.hypot(dx, dz) || 1; dx /= l; dz /= l;
+      const lx = dz, lz = -dx;                       // la derecha del empujón
+      const k = 0.7 + 0.5 * clamp(ctx.power ?? 1, 0.4, 2.4);
+      const w = this.world;
+      for (const [i, al, upv, lat] of def.imp) {
+        const pi = this.p[i];
+        if (w.iw[pi] === 0) continue;
+        w.vx[pi] += (dx * al + lx * lat) * k; w.vy[pi] += upv * k; w.vz[pi] += (dz * al + lz * lat) * k;
+      }
+    }
+  }
+
+  _enterDown(quick, why) {
+    this.seq = null;
+    this.state = 'down';
+    this.downT = 0;
+    this.dazeT = quick ? 0.12 : this._daze();
+    this.overlay = null; this.idleOv = null;
+    this.stumbleT = 0;
+    this.wantSpeed = 0; this.curSpeed = 0;
+    this.lastDownWhy = why || '';
+  }
+
+  /**
+   * Cómo quedó el cuerpo: 'supine' (boca arriba), 'prone' (boca abajo),
+   * 'side' (de costado, con `s`: 1 = sobre el lado derecho, cabeza a +X del
+   * marco), 'kneel', 'sit' o 'up'.
+   */
+  orientation() {
+    const gy = this.groundY > -900 ? this.groundY : 0;
+    const hipH = this.py(HIP) - gy, headH = this.py(HEAD) - gy;
+    if (this.uy > 0.55) {
+      // el tronco está vertical: ¿parado, arrodillado o sentado?
+      if (hipH > 0.72 * this.scale) return { from: 'up', s: 1 };
+      if (hipH < 0.36 * this.scale) return { from: 'sit', s: 1 };
+      return { from: 'kneel', s: 1 };
+    }
+    if (headH < 0.6 * this.scale || this.uy < 0.55) {
+      if (this.fy > 0.5) return { from: 'supine', s: 1 };
+      if (this.fy < -0.5) return { from: 'prone', s: 1 };
+      // de costado: la derecha del cuerpo apunta al piso → sobre el lado derecho
+      return { from: 'side', s: this.ry < 0 ? 1 : 0 };
+    }
+    return { from: 'kneel', s: 1 };
+  }
+
+  /** Marco para una levantada: +Z local hacia donde va a mirar al pararse. */
+  _frameForGetUp(from, s) {
+    let hx = this.px(HEAD) - this.px(HIP), hz = this.pz(HEAD) - this.pz(HIP);
+    const l = Math.hypot(hx, hz);
+    if (l > 0.05) { hx /= l; hz /= l; } else { hx = this.fx; hz = this.fz; }
+    let yaw;
+    if (from === 'supine') yaw = Math.atan2(-hx, -hz);          // hacia los pies
+    else if (from === 'prone') yaw = Math.atan2(hx, hz);        // hacia la cabeza
+    else if (from === 'side') {
+      // la panza mira a +Z: hacia donde apunta el frente del cuerpo, en el plano
+      let fx = this.fx, fz = this.fz; const fl = Math.hypot(fx, fz);
+      if (fl > 0.05) { fx /= fl; fz /= fl; } else { fx = -hz; fz = hx; }
+      yaw = Math.atan2(fx, fz);
+    } else yaw = this.yaw;
+    this.yaw = yaw;
+    this.rootX = this.x; this.rootZ = this.z;
+  }
+
+  /** Elige y arranca una levantada según cómo quedó (o la que le pidan). */
+  _startGetUp(forceName = null) {
+    if (this.dead || this.crawling) return false;
+    const o = this.orientation();
+    let def = forceName ? SEQ[forceName] : null;
+    if (!def) {
+      if (o.from === 'up') { this.seq = null; this.state = 'up'; this.downT = 0; return true; }
+      const list = getUpsFor(o.from);
+      if (!list.length) { this.state = 'up'; return true; }
+      def = pickWeighted(list, this.kind, this.rng || Math.random);
+    }
+    this._frameForGetUp(o.from, o.s);
+    this._playSeq(def, { s: o.s, from: o.from });
+    this.state = 'rising';
+    this.lastGetUp = def.name;
+    // aturdido: sacude la cabeza mientras arranca (no los corredores enojados)
+    const R = this.rng || Math.random;
+    if (this.kind !== 'runner' && R() < 0.55) this.overlay = { def: OVER.headshake, t: 0, k: 1, ctx: { sx: 1, along: 0, lat: 0 } };
+    return true;
+  }
+
+  /**
+   * Dormido en el piso o sentado: el cuerpo se acomoda YA en esa pose (sin
+   * animar) y se queda hasta que lo despierten. `pose`: 'sit', 'kneel',
+   * 'supine', 'prone', 'side'.
+   */
+  rest(pose = 'sit', s = 1) {
+    const name = 'rest_' + pose;
+    const def = SEQ[name] || SEQ.rest_sit;
+    const T = this._tA;
+    def.keys[0].pose(T, this, { s });
+    // colocar las partículas directamente en la pose (mundo)
+    const w = this.world, S = this.scale, c = Math.cos(this.yaw), sn = Math.sin(this.yaw);
+    const gy = this.groundY > -900 ? this.groundY : 0;
+    for (let i = 0; i < NP; i++) {
+      const lx = (T[i * 3] - T[HIP * 3]) * S, ly = T[i * 3 + 1] * S, lz = (T[i * 3 + 2] - T[HIP * 3 + 2]) * S;
+      w.setPos(this.p[i], this.rootX + lx * c + lz * sn, gy + ly + 0.02, this.rootZ - lx * sn + lz * c);
+      w.vx[this.p[i]] = 0; w.vy[this.p[i]] = 0; w.vz[this.p[i]] = 0;
+    }
+    this._playSeq(def, { s });
+    this.state = 'rest';
+    this.dormant = true;
+    return true;
+  }
+  /** Despierta: si estaba descansando, se levanta como corresponda. */
+  wake() {
+    if (!this.dormant) return;
+    this.dormant = false;
+    if (this.state === 'rest') {
+      const from = this.seq ? this.seq.def.from : 'sit';
+      this.seq = null;
+      this.state = 'down';
+      if (from === 'sit' || from === 'kneel') { this._startGetUp(from === 'sit' ? 'gu_sit' : 'gu_kneel'); }
+      else this._startGetUp();
+    }
+  }
 
   // ═══ pose objetivo ════════════════════════════════════════════════════════
   //  Todo en el espacio local del cuerpo: +Z adelante (hacia donde MIRA), +X
@@ -641,18 +920,21 @@ export class Ragdoll {
     const T = this.target, S = this.scale, P = this.pers;
     for (let i = 0; i < NP * 3; i++) T[i] = POSE[i] * S;
 
-    if (this.crawling) { this._poseCrawl(); return; }
+    if (this.crawling) { this._poseCrawl(); this._applyOverlays(); return; }
+    if (this.seq) { this._seqPose(); this._applyOverlays(); return; }
 
     const g = this.gait;
+    const stumbling = this.stumbleT > 0;
     // un poco de irregularidad en el ciclo: nadie camina como un metrónomo
     const ph = this.phase + P.phaseOff + Math.sin(this.idleT * 1.7 + P.phaseOff) * P.jitter * 0.22;
-    const moving = clamp01(this.wantSpeed / 1.0);        // 0 quieto … 1 caminando
+    const moving = stumbling ? 1 : clamp01(this.wantSpeed / 1.0);        // 0 quieto … 1 caminando
     // zancada (medio paso, desde la cadera) y altura del pie en vuelo
-    const st = this.stride * S * lerp(0.8, 2.0, g) * P.strideMul;
-    const lift = lerp(0.05, 0.30, g) * S * (this.isPlayer ? 1.2 : 1);
+    const st = this.stride * S * lerp(0.8, 2.0, g) * this._sp('strideMul', 1) * (stumbling ? 0.7 : 1);
+    const lift = lerp(0.05, 0.30, g) * S * (this.isPlayer ? 1.2 : 1) * this._sp('lift', 1) * (1 + this._sp('stomp') * 0.5);
 
-    // — agacharse / aterrizar / trepar: el tronco baja y las rodillas doblan (IK) —
+    // — agacharse / aterrizar / trepar / correr agachado: el tronco baja y las rodillas doblan (IK) —
     let crouch = Math.max(this.crouch * 0.36, this.landCrouch > 0 ? Math.min(0.5, this.landCrouch) * 0.6 : 0) * S;
+    crouch = Math.max(crouch, this._sp('crouchRun') * g * S);
     let vaultU = -1;
     if (this.vault) {
       vaultU = clamp01(this.vault.t / this.vault.dur);
@@ -664,12 +946,13 @@ export class Ragdoll {
       T[CHEST * 3 + 2] += crouch * 0.45; T[NECK * 3 + 2] += crouch * 0.6; T[HEAD * 3 + 2] += crouch * 0.7;
     }
 
-    // dirección del paso en coordenadas locales (pasos laterales / hacia atrás)
+    // dirección del paso en coordenadas locales (pasos laterales / hacia atrás / tambaleo)
     let sdx = 0, sdz = 1;
-    if (this.wantSpeed > 0.05) {
+    if (stumbling || this.wantSpeed > 0.05) {
       const c = Math.cos(this.yaw), s = Math.sin(this.yaw);
-      sdz = this.wantX * s + this.wantZ * c;
-      sdx = this.wantX * c - this.wantZ * s;
+      const wx = stumbling ? this.stumbleX : this.wantX, wz = stumbling ? this.stumbleZ : this.wantZ;
+      sdz = wx * s + wz * c;
+      sdx = wx * c - wz * s;
       const l = Math.hypot(sdx, sdz) || 1; sdx /= l; sdz /= l;
     }
 
@@ -678,17 +961,17 @@ export class Ragdoll {
     //  cero patinaje). Vuelo [π,2π): vuelve de -st a +st con suavizado y sube
     //  en arco. La rodilla se calcula con el largo real de muslo y pantorrilla
     //  y se dobla hacia adelante: por eso SE VE la flexión al trotar y correr.
-    const L1 = this._legL1 || (this._legL1 = this._rest(HPL, KNL));
-    const L2 = this._legL2 || (this._legL2 = this._rest(KNL, FTL));
+    const zig = this._sp('zigzag') * S * Math.sin(ph * 0.5) * moving;
     for (let side = 0; side < 2; side++) {
-      const kn = side ? KNR : KNL, ft = side ? FTR : FTL, hp = side ? HPR : HPL;
-      const amp = (P.limpSide === side ? P.limp : 1) * moving;
+      const ft = side ? FTR : FTL, hp = side ? HPR : HPL;
+      const isLimp = P.limpSide === side;
+      const amp = (isLimp ? P.limp : 1) * moving;
       let lp = (ph + (side ? Math.PI : 0)) % TAU; if (lp < 0) lp += TAU;
       let fz, fy;
       if (lp < Math.PI) { const u = lp / Math.PI; fz = st * (1 - 2 * u); fy = 0; }
       else { const u = (lp - Math.PI) / Math.PI; const e = u * u * (3 - 2 * u); fz = st * (2 * e - 1); fy = lift * Math.sin(u * Math.PI); }
-      fz *= amp; fy *= amp;
-      let footX = POSE[ft * 3] * S + sdx * fz;
+      fz *= amp; fy *= amp * (isLimp && P.dragLeg ? 0.15 : 1);   // la pierna que arrastra casi no se levanta
+      let footX = POSE[ft * 3] * S + sdx * fz - zig;
       let footY = POSE[ft * 3 + 1] * S + fy;
       let footZ = POSE[ft * 3 + 2] * S + sdz * fz;
       if (vaultU >= 0) {
@@ -697,27 +980,9 @@ export class Ragdoll {
         const tuck = Math.sin(Math.PI * clamp01((vaultU - 0.25) / 0.6));
         footY += tuck * 0.55 * S; footZ += tuck * 0.30 * S;
       }
-      T[ft * 3] = footX; T[ft * 3 + 1] = footY; T[ft * 3 + 2] = footZ;
       // la cadera del lado que vuela baja apenas
       T[hp * 3 + 1] -= fy * 0.12;
-      // IK: cadera lateral → pie
-      const hpx = T[hp * 3], hpy = T[hp * 3 + 1], hpz = T[hp * 3 + 2];
-      let dx = footX - hpx, dy = footY - hpy, dz = footZ - hpz;
-      let d = Math.hypot(dx, dy, dz) || 1e-4;
-      const maxD = (L1 + L2) * 0.985;
-      if (d > maxD) { const f = maxD / d; dx *= f; dy *= f; dz *= f; d = maxD; }
-      const ux = dx / d, uy = dy / d, uz = dz / d;
-      const a = (L1 * L1 - L2 * L2 + d * d) / (2 * d);
-      const hh = Math.sqrt(Math.max(0, L1 * L1 - a * a));
-      // la rodilla dobla hacia ADELANTE del cuerpo (+Z local), apenas hacia afuera
-      let bx = side ? 0.12 : -0.12, by = 0, bz = 1;
-      const dot = bx * ux + by * uy + bz * uz;
-      bx -= ux * dot; by -= uy * dot; bz -= uz * dot;
-      const bl = Math.hypot(bx, by, bz);
-      if (bl > 1e-4) { bx /= bl; by /= bl; bz /= bl; } else { bx = 0; by = 0; bz = 1; }
-      T[kn * 3] = hpx + ux * a + bx * hh;
-      T[kn * 3 + 1] = hpy + uy * a + by * hh;
-      T[kn * 3 + 2] = hpz + uz * a + bz * hh;
+      this._legIK(T, side, footX, footY, footZ, side ? 0.12 : -0.12, 0, 1);
     }
 
     // — pierna baleada: el cuerpo se agacha de ese lado (la rodilla cede) —
@@ -741,6 +1006,19 @@ export class Ragdoll {
       T[HEAD * 3] += lx * 1.2; T[HEAD * 3 + 2] += lz * 1.2;
       T[SHL * 3] += lx * 0.7; T[SHL * 3 + 2] += lz * 0.7; T[SHR * 3] += lx * 0.7; T[SHR * 3 + 2] += lz * 0.7;
     }
+    // — tambaleo: latigazo. El torso primero se queda atrás del empujón y
+    //   después lo sigue; los brazos suben a buscar equilibrio —
+    if (stumbling) {
+      const u = 1 - this.stumbleT / this.stumbleDur;
+      const whip = (u < 0.3 ? -(1 - u / 0.3) : (u - 0.3) / 0.7 * 0.5) * 0.10 * S;
+      const c = Math.cos(this.yaw), s = Math.sin(this.yaw);
+      const ldx = this.stumbleX * c - this.stumbleZ * s, ldz = this.stumbleX * s + this.stumbleZ * c;
+      T[CHEST * 3] += ldx * whip * 0.7; T[CHEST * 3 + 2] += ldz * whip * 0.7;
+      T[NECK * 3] += ldx * whip * 1.1; T[NECK * 3 + 2] += ldz * whip * 1.1;
+      T[HEAD * 3] += ldx * whip * 1.5; T[HEAD * 3 + 2] += ldz * whip * 1.5;
+      const armsUp = bell(u, 0.3) * 0.18 * S;
+      T[HAL * 3 + 1] += armsUp; T[HAR * 3 + 1] += armsUp; T[HAL * 3] -= armsUp * 0.8; T[HAR * 3] += armsUp * 0.8;
+    }
     // — mirar al objetivo: la cabeza se orienta hacia donde está el jugador —
     if (this.lookX || this.lookZ) {
       const c = Math.cos(this.yaw), s = Math.sin(this.yaw);
@@ -752,17 +1030,23 @@ export class Ragdoll {
 
     // — torso: balanceo lateral (menos al correr), bob vertical, inclinación —
     const sw = Math.sin(ph) * P.sway * lerp(0.035, 0.018, g) * S * (0.3 + moving);
-    const bob = Math.cos(ph * 2) * lerp(0.022, 0.05, g) * S * (0.2 + moving) * P.bobMul;
-    T[CHEST * 3] += sw * 0.55; T[NECK * 3] += sw * 0.3; T[HEAD * 3] += sw * 0.15;
+    const bob = Math.cos(ph * 2) * lerp(0.022, 0.05, g) * S * (0.2 + moving) * this._sp('bobMul', 1);
+    T[CHEST * 3] += sw * 0.55 + zig * 0.6; T[NECK * 3] += sw * 0.3 + zig * 0.8; T[HEAD * 3] += sw * 0.15 + zig;
     T[FTL * 3] -= sw; T[FTR * 3] -= sw; T[KNL * 3] -= sw * 0.6; T[KNR * 3] -= sw * 0.6;
     T[CHEST * 3 + 1] -= bob * 0.7; T[NECK * 3 + 1] -= bob * 0.6; T[HEAD * 3 + 1] -= bob * 0.5;
     T[FTL * 3 + 1] += bob * 0.3; T[FTR * 3 + 1] += bob * 0.3;
-    // inclinación hacia adelante: caminando poco, corriendo mucho; el zombi además encorvado
-    const lean = (0.04 + moving * 0.05 + g * 0.16 + P.lean + P.hunch) * S;
+    // inclinación hacia adelante: caminando poco, corriendo mucho; el estilo suma lo suyo
+    const hunch = P.hunch + this._sp('hunch');
+    const lean = (0.04 + moving * 0.05 + g * 0.16 + P.lean + this._sp('lean') + hunch) * S;
     T[CHEST * 3 + 2] += lean * 0.55; T[SHL * 3 + 2] += lean * 0.6; T[SHR * 3 + 2] += lean * 0.6;
     T[NECK * 3 + 2] += lean * 0.9;
     T[HEAD * 3 + 2] += lean * 1.25;
-    T[HEAD * 3 + 1] -= P.hunch * 0.6 * S + g * 0.03 * S;
+    T[HEAD * 3 + 1] -= hunch * 0.6 * S + g * 0.03 * S;
+    // cabeza gacha (estilo) y un hombro adelante
+    const hd = this._sp('headDown') * S;
+    if (hd) { T[HEAD * 3 + 1] -= hd; T[HEAD * 3 + 2] += hd * 0.6; T[NECK * 3 + 1] -= hd * 0.4; T[NECK * 3 + 2] += hd * 0.3; }
+    const shd = this._sp('shoulder') * S;
+    if (shd) { T[SHR * 3 + 2] += shd; T[SHL * 3 + 2] -= shd * 0.5; }
     T[HEAD * 3] += P.headTilt * 0.10 * S + Math.sin(ph * 0.7) * 0.02 * P.headBob * S;
     T[HEAD * 3 + 1] -= Math.abs(P.headTilt) * 0.05 * S;
     // hombros en contrarrotación con las piernas (al correr se nota)
@@ -779,50 +1063,25 @@ export class Ragdoll {
       T[CHEST * 3] += ws; T[NECK * 3] += ws * 1.2; T[HEAD * 3] += ws * 1.4;
     }
 
-    // — brazos: la mano se pone, el codo sale por IK doblando hacia atrás/afuera —
+    // — brazos —
+    this._arms(T, ph, g, st, moving, vaultU);
+    this._applyOverlays();
+  }
+
+  /** Brazos según el modo (jugador: apuntar) o el estilo de marcha del cuerpo. */
+  _arms(T, ph, g, st, moving, vaultU) {
+    const S = this.scale, P = this.pers;
     const sp = P.armSpread;
-    const A1 = this._armL1 || (this._armL1 = this._rest(SHL, ELL));
-    const A2 = this._armL2 || (this._armL2 = this._rest(ELL, HAL));
-    const elbowIK = (side, hx, hy, hz, bx, by, bz) => {
-      const sh = side ? SHR : SHL, el = side ? ELR : ELL, ha = side ? HAR : HAL;
-      T[ha * 3] = hx; T[ha * 3 + 1] = hy; T[ha * 3 + 2] = hz;
-      const sx = T[sh * 3], sy = T[sh * 3 + 1], sz = T[sh * 3 + 2];
-      let dx = hx - sx, dy = hy - sy, dz = hz - sz;
-      let d = Math.hypot(dx, dy, dz) || 1e-4;
-      const maxD = (A1 + A2) * 0.98;
-      if (d > maxD) { const f = maxD / d; dx *= f; dy *= f; dz *= f; d = maxD; }
-      const ux = dx / d, uy = dy / d, uz = dz / d;
-      const a = (A1 * A1 - A2 * A2 + d * d) / (2 * d);
-      const hh = Math.sqrt(Math.max(0, A1 * A1 - a * a));
-      const dot = bx * ux + by * uy + bz * uz;
-      bx -= ux * dot; by -= uy * dot; bz -= uz * dot;
-      const bl = Math.hypot(bx, by, bz);
-      if (bl > 1e-4) { bx /= bl; by /= bl; bz /= bl; } else { bx = side ? 1 : -1; by = 0; bz = 0; }
-      T[el * 3] = sx + ux * a + bx * hh; T[el * 3 + 1] = sy + uy * a + by * hh; T[el * 3 + 2] = sz + uz * a + bz * hh;
-    };
     if (vaultU >= 0) {
       // trepando: las manos van al borde (adelante y abajo) y empujan
       const push = Math.sin(Math.PI * clamp01(vaultU / 0.7));
       for (let side = 0; side < 2; side++) {
         const sgn = side ? 1 : -1;
-        elbowIK(side, sgn * 0.24 * S, (1.05 - push * 0.25) * S, (0.45 + push * 0.15) * S, sgn * 0.8, -0.3, -0.5);
+        this._armIK(T, side, sgn * 0.24 * S, (1.05 - push * 0.25) * S, (0.45 + push * 0.15) * S, sgn * 0.8, -0.3, -0.5);
       }
-    } else if (this.armMode === 'reach') {
-      // el clásico: brazos hacia adelante, temblando; con `lunge` se disparan
-      // más lejos y más bajo (la manotada); corriendo van más altos y bombean.
-      const tr = Math.sin(ph * 1.7) * 0.035 * P.wobble * S;
-      const lg = this.lunge > 0 ? Math.sin(Math.min(1, this.lunge / 0.35) * Math.PI) : 0;
-      for (let side = 0; side < 2; side++) {
-        const sh = side ? SHR : SHL, sgn = side ? 1 : -1;
-        const lp = ph + (side ? 0 : Math.PI);
-        const pump = Math.sin(lp) * st * 0.3 * g;
-        const hx = (POSE[(side ? HAR : HAL) * 3] * S) * sp * (0.9 - lg * 0.35);
-        const hy = POSE[sh * 3 + 1] * S - 0.14 * S + P.armHi * S - lg * 0.10 * S + g * 0.08 * S;
-        const hz = (0.50 + 0.1 * (1 - g)) * S + tr * 1.6 + lg * 0.22 * S + pump * 1.2;
-        // el codo cae hacia abajo y afuera
-        elbowIK(side, hx, hy, hz, sgn * 0.7, -0.8, -0.2);
-      }
-    } else if (this.armMode === 'aim') {
+      return;
+    }
+    if (this.armMode === 'aim') {
       // el jugador. Dos poses que se mezclan (aimBlend): APUNTANDO (arma al
       // frente, manos casi quietas con un bob leve) y CORRIENDO (arma baja,
       // cruzada al pecho, las manos bombean con el paso). Retroceso: las manos
@@ -842,32 +1101,187 @@ export class Ragdoll {
       const hlx = lerp(-0.07, -0.03, ab) * S + swA + dip * 0.11 * S;
       const hly = lerp(1.11, 1.27, ab) * S + bobA + pumpY - dip * 0.24 * S + rc * 0.02 * S;
       const hlz = lerp(0.28, 0.50, ab) * S + pumpZ - rc * 0.05 * S - dip * 0.20 * S;
-      elbowIK(1, hrx, hry, hrz, 0.9, -0.5, -0.3);
-      elbowIK(0, hlx, hly, hlz, -0.9, -0.6, -0.2);
+      this._armIK(T, 1, hrx, hry, hrz, 0.9, -0.5, -0.3);
+      this._armIK(T, 0, hlx, hly, hlz, -0.9, -0.6, -0.2);
       T[SHR * 3 + 2] += 0.03 * S * ab; T[SHL * 3 + 2] -= 0.02 * S * ab;
       // corriendo el torso se adelanta más y la cabeza mira al frente del paso
       T[CHEST * 3 + 2] += 0.03 * S * rb * moving; T[HEAD * 3 + 2] += 0.04 * S * rb * moving;
-    } else if (this.armMode === 'pump') {
+      return;
+    }
+    // estilo: caminando el de caminar, corriendo el de correr
+    const style = g > 0.5 ? (P.r.armStyle || this.armMode) : (P.w.armStyle || this.armMode);
+    const tr = Math.sin(ph * 1.7) * 0.035 * P.wobble * S;
+    const lg = this.lunge > 0 ? Math.sin(Math.min(1, this.lunge / 0.35) * Math.PI) : 0;
+    const reach = (side) => {
+      // el clásico: brazos hacia adelante, temblando; con `lunge` se disparan
+      // más lejos y más bajo (la manotada); corriendo van más altos y bombean.
+      const sh = side ? SHR : SHL, sgn = side ? 1 : -1;
+      const lp = ph + (side ? 0 : Math.PI);
+      const pump = Math.sin(lp) * st * 0.3 * g;
+      const hx = (POSE[(side ? HAR : HAL) * 3] * S) * sp * (0.9 - lg * 0.35);
+      const hy = POSE[sh * 3 + 1] * S - 0.14 * S + P.armHi * S - lg * 0.10 * S + g * 0.08 * S + this._sp('reachHi') * S;
+      const hz = (0.50 + 0.1 * (1 - g)) * S + tr * 1.6 + lg * 0.22 * S + pump * 1.2;
+      this._armIK(T, side, hx, hy, hz, sgn * 0.7, -0.8, -0.2);
+    };
+    const pump = (side, amp = 1, hiY = 0) => {
       // corriendo: brazos en oposición a la pierna del mismo lado, codos a 90°,
       // manos a la altura del pecho; caminando cuelgan y se mecen
-      for (let side = 0; side < 2; side++) {
-        const sh = side ? SHR : SHL, ha = side ? HAR : HAL, sgn = side ? 1 : -1;
-        const lp = ph + (side ? Math.PI : 0);            // opuesto a la pierna del mismo lado
-        const sw2 = -Math.sin(lp) * moving;
-        const hx = POSE[ha * 3] * S * sp * (1 - 0.15 * g);
-        const hy = POSE[sh * 3 + 1] * S - lerp(0.58, 0.30, g) * S + Math.abs(sw2) * 0.06 * S * g;
-        const hz = sw2 * st * lerp(0.6, 0.75, g) + 0.10 * g * S;
-        elbowIK(side, hx, hy, hz, sgn * 0.45, -0.35, -0.9);
+      const sh = side ? SHR : SHL, ha = side ? HAR : HAL, sgn = side ? 1 : -1;
+      const lp = ph + (side ? Math.PI : 0);
+      const sw2 = -Math.sin(lp) * moving * amp;
+      const hx = POSE[ha * 3] * S * sp * (1 - 0.15 * g);
+      const hy = POSE[sh * 3 + 1] * S - lerp(0.58, 0.30, g) * S + Math.abs(sw2) * 0.06 * S * g + hiY * S;
+      const hz = sw2 * st * lerp(0.6, 0.75, g) + 0.10 * g * S;
+      this._armIK(T, side, hx, hy, hz, sgn * 0.45, -0.35, -0.9);
+    };
+    const low = (side) => {
+      const ha = side ? HAR : HAL, sgn = side ? 1 : -1;
+      const lp = ph + (side ? Math.PI : 0);
+      const hx = POSE[ha * 3] * S * sp, hy = POSE[ha * 3 + 1] * S, hz = -Math.sin(lp) * st * 0.5 * moving + 0.03 * S;
+      this._armIK(T, side, hx, hy, hz, sgn * 0.4, -0.2, -0.95);
+    };
+    switch (style) {
+      case 'pump': pump(0); pump(1); break;
+      case 'low': low(0); low(1); break;
+      case 'flail': {
+        // brazos que se agitan: bombeo grande, manos altas y temblonas
+        for (let side = 0; side < 2; side++) {
+          const sgn = side ? 1 : -1, lp = ph + (side ? Math.PI : 0);
+          const sw2 = -Math.sin(lp) * moving;
+          const hx = sgn * (0.34 + 0.10 * Math.sin(ph * 3.1 + side)) * S;
+          const hy = (1.15 + 0.20 * sw2 + 0.08 * Math.sin(ph * 2.3 + side * 2)) * S;
+          const hz = (0.20 + sw2 * 0.35) * S;
+          this._armIK(T, side, hx, hy, hz, sgn * 0.6, -0.5, -0.6);
+        }
+        break;
       }
-    } else {
-      // 'low': brazos colgando, apenas se mecen
-      for (let side = 0; side < 2; side++) {
-        const sh = side ? SHR : SHL, ha = side ? HAR : HAL, sgn = side ? 1 : -1;
-        const lp = ph + (side ? Math.PI : 0);
-        const hx = POSE[ha * 3] * S * sp, hy = POSE[ha * 3 + 1] * S, hz = -Math.sin(lp) * st * 0.5 * moving + 0.03 * S;
-        elbowIK(side, hx, hy, hz, sgn * 0.4, -0.2, -0.95);
+      case 'back': {
+        // brazos hacia atrás, como si el cuerpo entero fuera adelante de ellos
+        for (let side = 0; side < 2; side++) {
+          const sgn = side ? 1 : -1, lp = ph + (side ? Math.PI : 0);
+          const sw2 = Math.sin(lp) * moving * 0.10;
+          const hx = sgn * 0.30 * S, hy = (0.88 + Math.abs(sw2) * 0.5) * S, hz = (-0.28 - 0.18 * g + sw2) * S;
+          this._armIK(T, side, hx, hy, hz, sgn * 0.6, 0.3, -0.7);
+        }
+        break;
       }
+      case 'clutch': {
+        // codos pegados, manos al pecho (corre como aferrando algo)
+        for (let side = 0; side < 2; side++) {
+          const sgn = side ? 1 : -1, lp = ph + (side ? Math.PI : 0);
+          const sw2 = Math.sin(lp) * moving * 0.04 * S;
+          this._armIK(T, side, sgn * 0.13 * S, 1.18 * S + sw2, 0.24 * S + sw2 * 0.5, sgn * 0.9, -0.4, -0.2);
+        }
+        break;
+      }
+      case 'wide': {
+        // brazos abiertos a 45°, balanceándose
+        for (let side = 0; side < 2; side++) {
+          const sgn = side ? 1 : -1, lp = ph + (side ? Math.PI : 0);
+          const sw2 = -Math.sin(lp) * moving;
+          this._armIK(T, side, sgn * 0.52 * S, (1.12 + sw2 * 0.08) * S, (0.18 + sw2 * 0.22) * S, sgn * 0.3, -1, -0.2);
+        }
+        break;
+      }
+      case 'one': { reach(1); low(0); break; }
+      case 'windmill': {
+        // las manos dibujan círculos
+        for (let side = 0; side < 2; side++) {
+          const sgn = side ? 1 : -1, a = ph * 1.5 + (side ? Math.PI : 0);
+          this._armIK(T, side, sgn * 0.32 * S, (1.25 + 0.30 * Math.sin(a) * moving) * S, (0.30 + 0.30 * Math.cos(a) * moving) * S, sgn * 0.8, -0.3, -0.5);
+        }
+        break;
+      }
+      case 'high': {
+        // manos altas y adelante, codos afuera (bombeo alto)
+        for (let side = 0; side < 2; side++) {
+          const sgn = side ? 1 : -1, lp = ph + (side ? Math.PI : 0);
+          const sw2 = -Math.sin(lp) * moving;
+          this._armIK(T, side, sgn * 0.30 * S, (1.50 + sw2 * 0.10) * S, (0.30 + sw2 * 0.18) * S, sgn * 1, -0.2, -0.3);
+        }
+        break;
+      }
+      default: reach(0); reach(1);
     }
+  }
+
+  /** IK de pierna: pie en (fx,fy,fz), rodilla doblando hacia (bx,by,bz). */
+  _legIK(T, side, fx, fy, fz, bx, by, bz) {
+    const kn = side ? KNR : KNL, ft = side ? FTR : FTL, hp = side ? HPR : HPL;
+    const L1 = this._legL1 || (this._legL1 = this._rest(HPL, KNL));
+    const L2 = this._legL2 || (this._legL2 = this._rest(KNL, FTL));
+    T[ft * 3] = fx; T[ft * 3 + 1] = fy; T[ft * 3 + 2] = fz;
+    const hpx = T[hp * 3], hpy = T[hp * 3 + 1], hpz = T[hp * 3 + 2];
+    let dx = fx - hpx, dy = fy - hpy, dz = fz - hpz;
+    let d = Math.hypot(dx, dy, dz) || 1e-4;
+    const maxD = (L1 + L2) * 0.985;
+    if (d > maxD) { const f = maxD / d; dx *= f; dy *= f; dz *= f; d = maxD; }
+    const ux = dx / d, uy = dy / d, uz = dz / d;
+    const a = (L1 * L1 - L2 * L2 + d * d) / (2 * d);
+    const hh = Math.sqrt(Math.max(0, L1 * L1 - a * a));
+    const dot = bx * ux + by * uy + bz * uz;
+    bx -= ux * dot; by -= uy * dot; bz -= uz * dot;
+    const bl = Math.hypot(bx, by, bz);
+    if (bl > 1e-4) { bx /= bl; by /= bl; bz /= bl; } else { bx = 0; by = 0; bz = 1; }
+    T[kn * 3] = hpx + ux * a + bx * hh;
+    T[kn * 3 + 1] = hpy + uy * a + by * hh;
+    T[kn * 3 + 2] = hpz + uz * a + bz * hh;
+  }
+  /** IK de brazo: mano en (hx,hy,hz), codo doblando hacia (bx,by,bz). */
+  _armIK(T, side, hx, hy, hz, bx, by, bz) {
+    const sh = side ? SHR : SHL, el = side ? ELR : ELL, ha = side ? HAR : HAL;
+    const A1 = this._armL1 || (this._armL1 = this._rest(SHL, ELL));
+    const A2 = this._armL2 || (this._armL2 = this._rest(ELL, HAL));
+    T[ha * 3] = hx; T[ha * 3 + 1] = hy; T[ha * 3 + 2] = hz;
+    const sx = T[sh * 3], sy = T[sh * 3 + 1], sz = T[sh * 3 + 2];
+    let dx = hx - sx, dy = hy - sy, dz = hz - sz;
+    let d = Math.hypot(dx, dy, dz) || 1e-4;
+    const maxD = (A1 + A2) * 0.98;
+    if (d > maxD) { const f = maxD / d; dx *= f; dy *= f; dz *= f; d = maxD; }
+    const ux = dx / d, uy = dy / d, uz = dz / d;
+    const a = (A1 * A1 - A2 * A2 + d * d) / (2 * d);
+    const hh = Math.sqrt(Math.max(0, A1 * A1 - a * a));
+    const dot = bx * ux + by * uy + bz * uz;
+    bx -= ux * dot; by -= uy * dot; bz -= uz * dot;
+    const bl = Math.hypot(bx, by, bz);
+    if (bl > 1e-4) { bx /= bl; by /= bl; bz /= bl; } else { bx = side ? 1 : -1; by = 0; bz = 0; }
+    T[el * 3] = sx + ux * a + bx * hh; T[el * 3 + 1] = sy + uy * a + by * hh; T[el * 3 + 2] = sz + uz * a + bz * hh;
+  }
+
+  /** Pose de una secuencia: mezcla suave entre la clave actual y la siguiente (en unidad, luego escala). */
+  _seqPose() {
+    const S = this.seq, T = this.target, sc = this.scale;
+    const keys = S.def.keys;
+    const a = keys[Math.max(0, S.key)], b = keys[Math.min(Math.max(0, S.key) + 1, keys.length - 1)];
+    const A = this._tA, B = this._tB;
+    a.pose(A, this, S.ctx);
+    if (b === a) { for (let i = 0; i < NP * 3; i++) T[i] = A[i] * sc; return; }
+    b.pose(B, this, S.ctx);
+    // la clave siguiente puede estar en un marco girado: se expresa en el actual
+    if (S.pendingYaw) rotY(B, S.pendingYaw, 0, 0);
+    const u = S.u, e = u * u * (3 - 2 * u);
+    for (let i = 0; i < NP * 3; i++) T[i] = (A[i] + (B[i] - A[i]) * e) * sc;
+  }
+
+  /** Overlays (sacudón / manotazo / tic) sumados a la pose, en espacio unidad. */
+  _applyOverlays() {
+    const ov = this.overlay, io = this.idleOv;
+    if (!ov && !io) return;
+    const T = this.target, U = this._tU, sc = this.scale, inv = 1 / sc;
+    for (let i = 0; i < NP * 3; i++) U[i] = T[i] * inv;
+    if (ov) {
+      ov.t += this._dtLast;
+      const u = ov.t / ov.def.dur;
+      if (u >= 1) this.overlay = null;
+      else ov.def.fn(U, u, ov.k, ov.ctx);
+    }
+    if (io) {
+      io.t += this._dtLast;
+      let u = io.t / io.def.dur;
+      if (u >= 1) { if (io.def.loop) { io.t -= io.def.dur; u -= 1; } else this.idleOv = null; }
+      if (this.idleOv) io.def.fn(U, u, io.k, io.ctx || {});
+    }
+    for (let i = 0; i < NP * 3; i++) T[i] = U[i] * sc;
   }
 
   /** Pose de arrastre: sin piernas útiles, tracción con los brazos. */
@@ -905,7 +1319,10 @@ export class Ragdoll {
       const pc = P[CHEST];
       const cy = w.py[pc];
       if (cy > 0.4 && cy < 1.35 && w.vy[pc] < 0.6) {
-        const fx = this.fx, fz = this.fz;
+        // hacia donde CAE si lo dirige una caída (de costado: al costado); si no, hacia donde mira
+        let fx = this.fx, fz = this.fz;
+        const cx = this.seq && this.seq.ctx;
+        if (cx && cx.dx !== undefined) { fx = cx.dx; fz = cx.dz; }
         const gy = this.groundY > -900 ? this.groundY : 0;
         const k = (1 - Math.exp(-55 * h)) * 0.3;
         const maxStep = 6 * h;
@@ -966,9 +1383,11 @@ export class Ragdoll {
   postVelocity(h, w) {
     const mg = this.muscleGlobal;
     if (mg <= 0.002 || this.dead) return;
+    if (this.seq && (this.seq.def.kind === 'fall' || this.seq.def.kind === 'die')) return;   // cayendo: la inercia manda
     const phys = this.limp > 0 ? 1 : (this.stagger > 0 ? clamp01(this.stagger / 0.55) * 0.9 : 0);
     if (phys >= 0.999) return;
-    const vtx = this.wantX * this.curSpeed, vtz = this.wantZ * this.curSpeed;
+    const stumbling = this.stumbleT > 0;
+    const vtx = stumbling ? this.rootVX : this.wantX * this.curSpeed, vtz = stumbling ? this.rootVZ : this.wantZ * this.curSpeed;
     const P = this.p, mus = this.muscle, LM = this.limbMul;
     // Amortiguación CRÍTICA, no infinita: con k (rigidez por substep) y m, el
     // resorte tiene ω = sqrt(k·m)/h; amortiguar a = 1.45·sqrt(k·m) por substep
@@ -1027,83 +1446,222 @@ export class Ragdoll {
   }
 
   // ═══ reacciones físicas ═══════════════════════════════════════════════════
+  /** Dirección del empujón en el marco del cuerpo: along (+ adelante) y lat (+ derecha). */
+  _local(dx, dz) {
+    const l = Math.hypot(dx, dz) || 1; dx /= l; dz /= l;
+    const c = Math.cos(this.yaw), s = Math.sin(this.yaw);
+    return { along: dx * s + dz * c, lat: dx * c - dz * s, dx, dz };
+  }
+
   /**
-   * Empujón de cuerpo entero: impulso a todas las partículas, la raíz virtual
-   * se muda con el cuerpo y queda aturdido. Con fuerza ≥ 1.2 se apagan los
-   * músculos un instante y se cae.
+   * Tambaleo: pasos reales en la dirección del empujón, con latigazo del
+   * torso; la raíz se va con él y el cuerpo QUEDA desplazado. `v0` en m/s.
+   */
+  stumble(dx, dz, v0 = 1.8, dur = 0.35) {
+    if (this.dead || this.state !== 'up' || this.crawling) return false;
+    const l = Math.hypot(dx, dz) || 1; dx /= l; dz /= l;
+    if (this.stumbleT > 0) {
+      // ya tambalea: se suma (acotado), no se reinicia el latigazo
+      this.stumbleX = this.stumbleX * 0.5 + dx * 0.5; this.stumbleZ = this.stumbleZ * 0.5 + dz * 0.5;
+      const nl = Math.hypot(this.stumbleX, this.stumbleZ) || 1; this.stumbleX /= nl; this.stumbleZ /= nl;
+      this.stumbleV = Math.min(3.2, this.stumbleV + v0 * 0.5);
+      this.stumbleT = Math.max(this.stumbleT, dur * 0.7); this.stumbleDur = Math.max(this.stumbleDur, this.stumbleT);
+      return true;
+    }
+    this.stumbleX = dx; this.stumbleZ = dz;
+    this.stumbleV = Math.min(3.2, v0); this.stumbleT = dur; this.stumbleDur = dur;
+    this.stumbles++;
+    this.lunge = 0;
+    return true;
+  }
+
+  /** Sacudón (overlay) encima de la marcha. `k` intensidad, `ctx` {sx, along, lat}. */
+  playOverlay(name, k = 1, ctx = null) {
+    const def = OVER[name];
+    if (!def) return false;
+    this.overlay = { def, t: 0, k, ctx: ctx || { sx: 1, along: 0, lat: 0 } };
+    this.idleOv = null;
+    this.lastFlinch = name;
+    return true;
+  }
+
+  /**
+   * Empujón de cuerpo entero (multitud, empujón del jugador, manotazo del
+   * bruto): impulso a todas las partículas y, según la fuerza, tambaleo o
+   * una caída elegida por el ángulo.
    */
   knockback(dx, dz, strength = 1, up = 0.35) {
     const w = this.world;
     const l = Math.hypot(dx, dz) || 1; dx /= l; dz /= l;
+    if (this.dead) return;
     // ya va volando: un segundo empujón suma poco (no se acumula sin techo)
-    if (this.limp > 0.1) strength *= 0.3;
+    if (this.state !== 'up') strength *= 0.3;
     const v = 3.2 * strength;
-    const tip = strength >= 1.3;
     for (let i = 0; i < NP; i++) {
       const pi = this.p[i];
       if (w.iw[pi] === 0) continue;
       const hf = 0.5 + clamp01((POSE[i * 3 + 1]) / 1.7);
-      w.vx[pi] += dx * v * hf; w.vz[pi] += dz * v * hf;
-      w.vy[pi] += v * up * (i === HEAD || i === CHEST ? 1.2 : 0.6);
+      w.vx[pi] += dx * v * hf * 0.8; w.vz[pi] += dz * v * hf * 0.8;
+      w.vy[pi] += v * up * (i === HEAD || i === CHEST ? 1.2 : 0.6) * 0.7;
     }
-    // TUMBAR: al torso alto le sumamos empuje extra y a los pies les damos un
-    // barrido hacia adelante — las piernas salen de abajo y el cuerpo cae de
-    // espaldas, en vez de salir volando rígido y aterrizar parado.
-    if (tip) {
-      for (const i of [HEAD, NECK, CHEST]) w.addImpulse(this.p[i], dx * v * 4, v * 1.2, dz * v * 4);
-      for (const i of [FTL, FTR, KNL, KNR]) { const pi = this.p[i]; if (w.iw[pi] > 0) { w.vx[pi] += dx * v * 1.4; w.vz[pi] += dz * v * 1.4; w.vy[pi] += 0.5; } }
+    this.lastHitX = dx; this.lastHitZ = dz;
+    this.stagger = Math.min(0.95, this.stagger + 0.35 + 0.3 * strength);
+    if (strength >= 1.2 && this.state === 'up') { this.fall('knockback', dx, dz, strength); return; }
+    if (this.state === 'up') {
+      const L = this._local(dx, dz);
+      this.stumble(dx, dz, 1.4 + 1.2 * strength, 0.3 + 0.15 * strength);
+      this.playOverlay(L.along < -0.3 ? 'fl_chest_fold' : L.along > 0.3 ? 'fl_back_arch' : 'fl_side_lean', Math.min(1.6, 0.6 + strength * 0.5), { sx: L.lat > 0 ? 1 : -1, along: L.along, lat: L.lat });
+      this.rootX += dx * 0.25 * strength; this.rootZ += dz * 0.25 * strength;
     }
-    this.rootX += dx * 0.9 * strength; this.rootZ += dz * 0.9 * strength;
-    this.stagger = Math.min(0.95, this.stagger + 0.45 + 0.3 * strength);
-    if (strength >= 1.2) this.limp = Math.max(this.limp, 0.45 + 0.18 * strength);
     this.lunge = 0;
     this.wantSpeed = 0;
   }
 
+  /** Choque a la carrera contra otro cuerpo de pie: variantes por ángulo y velocidad. */
+  _bumpInto(o, bx, bz) {
+    const R = this.rng || Math.random;
+    const L = o._local(this.wantX, this.wantZ);   // el empujón visto desde el otro
+    const sp = this.speed;
+    if (L.along > 0.5) {
+      // por la espalda: el de adelante cae de boca, yo me tropiezo con él
+      o.knockback(this.wantX, this.wantZ, 0.9 + 0.3 * sp, 0.2);
+      if (sp > 3.2 && R() < 0.5) this.fall('trip', this.wantX, this.wantZ, 1);
+      else { this.stumble(-this.wantX, -this.wantZ, 1.2, 0.25); this.stagger = Math.min(0.9, this.stagger + 0.4); }
+    } else if (L.along < -0.5) {
+      // de frente: a más velocidad los dos se van al piso; si no, rebote mutuo
+      if (sp > 3.4 && R() < 0.6) { o.knockback(this.wantX, this.wantZ, 1.3 + 0.2 * sp, 0.3); this.fall('knockback', -this.wantX, -this.wantZ, 1.1); }
+      else { o.knockback(this.wantX, this.wantZ, 0.7 + 0.25 * sp, 0.25); this.stumble(-this.wantX, -this.wantZ, 1.5, 0.3); this.playOverlay('fl_chest_fold', 1, { sx: 1, along: -1, lat: 0 }); }
+    } else {
+      // hombrazo: el otro gira y tambalea de costado; yo sigo medio girado
+      const sgn = L.lat > 0 ? 1 : -1;
+      o.spin += sgn * (2.5 + sp * 0.6);
+      o.knockback(this.wantX, this.wantZ, 0.6 + 0.2 * sp, 0.15);
+      this.spin -= sgn * 1.5;
+      this.stagger = Math.min(0.9, this.stagger + 0.35);
+      this.limp = Math.max(this.limp, 0.08);
+    }
+  }
+
   /**
-   * Se estrelló corriendo: el torso conserva la velocidad que traía, los
-   * músculos se apagan un rato y el cuerpo pega contra lo que sea que lo
-   * frenó. Más velocidad, más tiempo tirado.
+   * Se estrelló corriendo contra algo estático. De frente (normal de la pared
+   * casi opuesta a la carrera) rebota y cae; de refilón raspa el hombro, gira y
+   * sigue tambaleando a lo largo de la pared (y sólo se cae si venía muy rápido).
    */
   slam(dx, dz, speed) {
     const w = this.world;
     const l = Math.hypot(dx, dz) || 1; dx /= l; dz /= l;
     const v = Math.max(1.5, speed);
-    // el torso conserva (o recupera) la velocidad que traía; las piernas se
-    // traban: de ahí el vuelco hacia adelante
+    // normal de lo que tiene adelante
+    let nx = -dx, nz = -dz;
+    const t = w.raycastStatic(this.x, this.py(HIP), this.z, dx, 0, dz, 0.9 * this.scale, _out);
+    if (t >= 0 && _out.nx !== undefined) { const nl = Math.hypot(_out.nx, _out.nz) || 1; nx = _out.nx / nl; nz = _out.nz / nl; }
+    const headOn = -(dx * nx + dz * nz);       // 1 = de frente, 0 = de refilón
+    this.slamCool = 1.5;
+    this.slams++;
+    this.lunge = 0;
+    this.lastHitX = -dx; this.lastHitZ = -dz;
+    // el torso conserva (o recupera) la velocidad que traía; las piernas se traban
     for (const i of [HEAD, NECK, CHEST, SHL, SHR, ELL, ELR, HAL, HAR, HIP]) {
       const pi = this.p[i];
       if (w.iw[pi] === 0) continue;
       const cur = w.vx[pi] * dx + w.vz[pi] * dz;
-      const add = Math.max(0, v - cur);
+      const add = Math.max(0, v - cur) * (headOn > 0.7 ? 1 : 0.5);
       w.vx[pi] += dx * add; w.vz[pi] += dz * add;
-      w.vy[pi] += 0.5 * (i === HEAD ? 1.6 : 1);
+      w.vy[pi] += 0.4 * (i === HEAD ? 1.6 : 1);
     }
     for (const i of [HPL, HPR, KNL, KNR, FTL, FTR]) {
       const pi = this.p[i];
       if (w.iw[pi] === 0) continue;
-      w.vx[pi] *= 0.15; w.vz[pi] *= 0.15;
+      w.vx[pi] *= 0.25; w.vz[pi] *= 0.25;
     }
-    this.limp = Math.max(this.limp, 0.35 + speed * 0.1);
-    this.stagger = 0.9;
-    this.lunge = 0;
-    this.slamCool = 1.5;
-    this.slams++;
     // a quien tenía adelante se lo lleva puesto
     const bodies = w.bodies;
     for (let i = 0; i < bodies.length; i++) {
       const o = bodies[i];
-      if (o === this || !o.p || o.dead || !o.upright) continue;
+      if (o === this || !o.p || o.dead || typeof o.knockback !== 'function' || !o.upright) continue;
       const ox = o.x - this.x, oz = o.z - this.z;
       const d = Math.hypot(ox, oz);
       if (d > 0.95 * this.scale || d < 1e-4) continue;
       if ((ox * dx + oz * dz) / d < 0.5) continue;
       o.knockback(dx, dz, 0.55 + speed * 0.28, 0.3);
     }
+    const R = this.rng || Math.random;
+    if (headOn > 0.72 || speed < 2.2) {
+      this.fall('wall', dx, dz, 0.6 + speed * 0.2);
+    } else {
+      // de refilón: gira hacia la tangente, raspa y tambalea a lo largo de la pared
+      let tx = dx - nx * (dx * nx + dz * nz), tz = dz - nz * (dx * nx + dz * nz);
+      const tl = Math.hypot(tx, tz) || 1; tx /= tl; tz /= tl;
+      const L = this._local(nx, nz);
+      this.spin += (L.lat > 0 ? -1 : 1) * (3 + speed * 0.5);
+      this.stagger = Math.min(0.95, 0.5 + speed * 0.1);
+      this.stumble(tx * 0.8 + nx * 0.6, tz * 0.8 + nz * 0.6, 1.2 + speed * 0.3, 0.45);
+      this.playOverlay('fl_shoulder', 1.3, { sx: L.lat > 0 ? 1 : -1, along: 0.5, lat: -L.lat });
+      if (speed > 3.6 && R() < 0.5) this.fall('shot', nx * 0.3 + tx, nz * 0.3 + tz, 1);
+    }
   }
 
   /** Sacudón corto: física pura `t` segundos (un tiro, un golpe). */
   flinch(t) { this.limp = Math.max(this.limp, t); }
+
+  /**
+   * DIRECTOR DE CAÍDAS. `cause`: 'shot' | 'knockback' | 'wall' | 'trip' |
+   * 'collapse' | 'tackle' | 'die'. (dx,dz): hacia dónde va el empujón.
+   * `power` ~1 normal, 2 enorme. Elige la variante por causa y ángulo
+   * (de espaldas, de tabla, de boca, de rodillas, de costado, girando…).
+   */
+  fall(cause, dx = this.fx, dz = this.fz, power = 1, forceName = null) {
+    if (this.dead || this.crawling) return false;
+    if (this.seq && (this.seq.def.kind === 'fall' || this.seq.def.kind === 'die')) return false;
+    const l = Math.hypot(dx, dz) || 1; dx /= l; dz /= l;
+    const L = this._local(dx, dz);
+    const R = this.rng || Math.random;
+    const runner = this.kind === 'runner', moving = this.speed > 1.5;
+    let def = forceName ? SEQ[forceName] : null;
+    let s = L.lat > 0 ? 1 : 0;
+    if (!def) {
+      const pick = (opts) => {
+        let tot = 0; for (const [, w] of opts) tot += w;
+        let r = R() * tot;
+        for (const [n, w] of opts) if ((r -= w) <= 0) return SEQ[n];
+        return SEQ[opts[opts.length - 1][0]];
+      };
+      const sideW = Math.abs(L.lat) > 0.45 ? 2.5 : 0.4;
+      if (cause === 'die') {
+        def = pick([['die_collapse', 2], ['die_stagger', moving ? 3 : 0.8], ['die_knees', 2], ['die_back', L.along < -0.3 ? 3 : 0.3], ['die_spin', sideW], ['die_slump', 1.5]]);
+      } else if (cause === 'tackle') {
+        def = SEQ.tackle;
+      } else if (power >= 1.9 && cause !== 'trip') {
+        def = SEQ.fall_fly;
+      } else if (cause === 'wall') {
+        def = pick([['fall_wall_bounce', 3], ['fall_back_plank', 1], ['fall_side', 0.8]]);
+        if (def === SEQ.fall_side) s = R() < 0.5 ? 1 : 0;
+        // la pared lo frena: el cuerpo va contra ella, cae hacia atrás
+        dx = -dx; dz = -dz;
+      } else if (cause === 'trip') {
+        def = pick([['fall_front_face', 2.5], ['fall_front_knees', 1.2], ['fall_trip_roll', runner ? 3 : 0.4], ['fall_spin', 0.3]]);
+      } else if (cause === 'collapse') {
+        def = pick([['fall_collapse', 3], ['fall_front_knees', 1.5], ['fall_side', 0.8]]);
+      } else if (L.along < -0.35) {
+        // lo empujan hacia atrás
+        def = pick([['fall_back_sit', 3], ['fall_back_plank', 2], ['fall_spin', sideW], ['fall_collapse', 0.8], ['fall_side', sideW * 0.5]]);
+      } else if (L.along > 0.35) {
+        // lo empujan hacia adelante
+        def = pick([['fall_front_face', 3], ['fall_front_knees', 1.5], ['fall_trip_roll', runner && moving ? 2 : 0.2], ['fall_spin', sideW], ['fall_side', sideW * 0.5]]);
+      } else {
+        def = pick([['fall_side', 3], ['fall_spin', 2], ['fall_back_sit', 0.5]]);
+      }
+    }
+    if (!def) return false;
+    this.state = cause === 'die' ? 'dying' : 'falling';
+    if (cause === 'die') this.dying = 1;
+    this.falls++;
+    this.lastFall = def.name;
+    this.lastHitX = dx; this.lastHitZ = dz;
+    this._playSeq(def, { dx, dz, power, s, cause, along: L.along, lat: L.lat });
+    this.stagger = 0.9;
+    return true;
+  }
 
   /**
    * Trepar a lo que tenga adelante si es bajo (escritorio, mesa, mostrador,
@@ -1114,7 +1672,7 @@ export class Ragdoll {
    * y las rodillas absorben.
    */
   tryVault(dx, dz) {
-    if (this.vault || this.dead || this.dying > 0 || this.crawling) return false;
+    if (this.vault || this.dead || this.dying > 0 || this.crawling || this.state !== 'up') return false;
     const w = this.world;
     const l = Math.hypot(dx, dz) || 1; dx /= l; dz /= l;
     const hip = this.p[HIP];
@@ -1129,7 +1687,7 @@ export class Ragdoll {
     const travel = t + 0.55 * this.scale;
     this.vault = { t: 0, dur: 0.85, x0: this.rootX, z0: this.rootZ, dx, dz, travel, y0: base, y1: top };
     this.vaults++;
-    this.stagger = 0; this.lunge = 0;
+    this.stagger = 0; this.lunge = 0; this.stumbleT = 0;
     return true;
   }
 
@@ -1145,14 +1703,15 @@ export class Ragdoll {
   //   1. impulso LOCAL en el punto del hueso (repartido entre sus dos
   //      partículas según dónde pegó): el miembro se va, el torso gira si el
   //      impacto fue descentrado;
-  //   2. momento al CUERPO ENTERO (J/M, exagerado ×1.8 como en cualquier
-  //      juego) y el objetivo de equilibrio (la raíz) se muda con el empujón:
-  //      el cuerpo queda desplazado, no vuelve como una goma;
-  //   3. la cadena golpeada queda sin músculo un instante (flinch) y, por
-  //      zona: la cabeza se va hacia atrás; una pierna baleada se dobla si
-  //      estaba parado o lo tropieza si venía corriendo; un brazo baleado
-  //      cuelga un rato;
-  //   4. mucho momento en poco tiempo (escopeta, ráfaga) lo tira.
+  //   2. un SACUDÓN elegido por zona y ángulo (la cabeza se va, el pecho se
+  //      pliega, la espalda se arquea, se dobla por el estómago, el hombro
+  //      gira el cuerpo, el brazo vuela, la cadera se va, se ladea, la pierna
+  //      da un saltito) encima de lo que estuviera haciendo;
+  //   3. un TAMBALEO con pasos reales en la dirección del tiro: la raíz se va
+  //      con él y el cuerpo queda desplazado (no vuelve como una goma);
+  //   4. mucho momento en poco tiempo (escopeta, ráfaga) lo tira, con una
+  //      caída elegida por el ángulo; un tiro en la pierna corriendo lo
+  //      tropieza; un tiro fuerte en la pierna parado lo desploma.
   hit(boneIdx, s, dmg, imp) {
     const w = this.world;
     const res = { zone: BONES[boneIdx][4], killed: false, severed: false, damage: 0 };
@@ -1177,7 +1736,6 @@ export class Ragdoll {
           const f = (i >= HPL) ? 0.3 : 1.0;
           w.vx[pi] += dx * dv * f; w.vz[pi] += dz * dv * f;
         }
-        this.rootX += dx * dv * 0.28; this.rootZ += dz * dv * 0.28;
         this.hitJ += J;
       }
     }
@@ -1188,33 +1746,71 @@ export class Ragdoll {
     this.boneHP[boneIdx] -= dmg;
 
     if (!this.dead) {
-      this.stagger = Math.min(0.9, this.stagger + dmg * 0.006 * this.staggerScale);
-      this.flinch(clamp((0.05 + J * 0.012) * this.staggerScale, 0.02, 0.5));
-      this._weakenAround(boneIdx, clamp01(dmg * 0.012));
+      const hl = Math.hypot(dx, dz);
+      const hdx = hl > 1e-4 ? dx / hl : this.fx, hdz = hl > 1e-4 ? dz / hl : this.fz;
+      this.lastHitX = hdx; this.lastHitZ = hdz;
+      const L = this._local(hdx, hdz);
       const R = this.rng || Math.random;
+      const kk = clamp(J / 7, 0.5, 2.2) * this.staggerScale;     // pistola = 1
+      const ctx = { sx: L.lat > 0 ? 1 : -1, along: L.along, lat: L.lat };
+      this.stagger = Math.min(0.9, this.stagger + dmg * 0.006 * this.staggerScale);
+      this.flinch(clamp((0.03 + J * 0.006) * this.staggerScale, 0.02, 0.3));
+      this._weakenAround(boneIdx, clamp01(dmg * 0.012));
+      const up = this.state === 'up' && !this.crawling;
+      let fell = false;
       if (zone === 0) {
         // la cabeza se va con el tiro
         const ph = this.p[HEAD];
         if (w.iw[ph] > 0) { w.vx[ph] += dx * J * 0.35; w.vy[ph] += 0.4; w.vz[ph] += dz * J * 0.35; }
         this.stagger = Math.min(0.9, this.stagger + 0.25 * this.staggerScale);
+        if (up) this.playOverlay(J >= 11 ? 'fl_jolt' : 'fl_head_snap', kk, ctx);
+      } else if (zone === 1) {
+        if (up) {
+          if (boneIdx === B_CLAVL || boneIdx === B_CLAVR) {
+            ctx.sx = boneIdx === B_CLAVR ? 1 : -1;
+            this.playOverlay('fl_shoulder', kk, ctx);
+            // el hombro empujado gira el cuerpo alrededor del otro
+            if (!this.lockYaw) this.spin += (boneIdx === B_CLAVR ? -1 : 1) * L.along * J * 0.22 + ctx.sx * L.lat * J * 0.1;
+          } else if (boneIdx === B_PELVL || boneIdx === B_PELVR) {
+            this.playOverlay(Math.abs(L.lat) > 0.5 ? 'fl_side_lean' : 'fl_hip_thrust', kk, ctx);
+          } else if (boneIdx === B_SPINE && s > 0.55) {
+            // bajo vientre: de frente se dobla; por la espalda la cadera se va
+            this.playOverlay(L.along < 0 ? 'fl_gut' : 'fl_hip_thrust', kk, ctx);
+          } else {
+            this.playOverlay(L.along < -0.3 ? 'fl_chest_fold' : L.along > 0.3 ? 'fl_back_arch' : 'fl_side_lean', kk, ctx);
+          }
+        }
       } else if (zone === 2) {
         const side = (boneIdx === B_UARMR || boneIdx === B_FARMR) ? 1 : 0;
         this.armLimp[side] = Math.max(this.armLimp[side], 0.5 + dmg * 0.012);
+        ctx.sx = side ? 1 : -1;
+        if (up) this.playOverlay('fl_arm_swing', kk, ctx);
       } else if (zone === 3) {
         const side = (boneIdx === B_THIGHR || boneIdx === B_SHINR) ? 1 : 0;
-        if (this.speed > 1.6 && this.upright && R() < 0.7) {
-          // corriendo, una pierna baleada = tropezón
-          this.knockback(this.fx, this.fz, 1.3, 0.1);
+        ctx.sx = side ? 1 : -1;
+        if (up && this.speed > 1.6 && this.upright && R() < 0.85) {
+          // corriendo, una pierna baleada = tropezón (el corredor da la voltereta)
           this.tripped++;
+          fell = this.fall('trip', this.fx, this.fz, 0.9);
+        } else if (up && (J >= 11 || dmg >= 40) && R() < 0.4) {
+          // un tiro fuerte en la pierna parado: se desploma de ese lado
+          fell = this.fall('collapse', hdx, hdz, 0.8);
         } else {
           this.legBuckle[side] = Math.max(this.legBuckle[side], 0.45 + dmg * 0.01);
+          if (up) this.playOverlay('fl_leg_hop', kk, ctx);
         }
       }
-      // mucho momento en poco tiempo (escopeta, ráfaga): se cae, y cuanto más
-      // momento, más tiempo sin control
+      // tambaleo: pasos en la dirección del tiro (las piernas no tambalean
+      // por un tiro en la pierna: se doblan, que es otra cosa)
+      if (up && !fell && zone !== 3) {
+        const v0 = (1.2 + J * 0.16) * this.staggerScale;
+        this.stumble(hdx, hdz, v0, 0.30 + J * 0.014);
+      }
+      // mucho momento en poco tiempo (escopeta, ráfaga): se cae, con una
+      // caída elegida por el ángulo
       const M0 = 70 * this.massScale * S * S * S;
-      if (this.hitJ / M0 > 0.42) {
-        this.limp = Math.max(this.limp, 0.3 + (this.hitJ / M0) * 0.45);
+      if (up && !fell && this.hitJ / M0 > 0.42) {
+        this.fall('shot', hdx, hdz, 0.8 + (this.hitJ / M0));
         this.hitJ = 0;
       }
     }
@@ -1268,25 +1864,30 @@ export class Ragdoll {
     if (boneIdx === B_THIGHL || boneIdx === B_THIGHR) {
       this.crawling = true;
       this.stride *= 0.6;
+      // sin pierna no hay caídas ni levantadas: se arrastra
+      this.seq = null; this.state = 'up'; this.stumbleT = 0;
     }
     const p0 = this.p[BONES[boneIdx][1]];
     return { x: w.px[p0], y: w.py[p0], z: w.pz[p0] };
   }
 
   /**
-   * Muerte. Instantánea (tiro en la cabeza): los músculos se apagan ya.
-   * Lenta (tiros al cuerpo): tambalea un tercio de segundo y recién ahí cae.
+   * Muerte. Instantánea (tiro en la cabeza, escopeta a quemarropa): los
+   * músculos se apagan ya y cae con la inercia que traía. Lenta: una
+   * secuencia de muerte elegida por el ángulo del último golpe (se desploma,
+   * camina herido y cae, cae de rodillas, se arquea de espaldas, gira…).
    */
   kill(instant = true) {
     if (this.dead) return;
-    if (instant || this.dying > 0) { this._die(); return; }
-    this.dying = 0.32;
-    this.wantSpeed = 0;
+    if (instant || this.dying > 0 || this.crawling || this.state !== 'up') { this._die(); return; }
+    if (!this.fall('die', this.lastHitX, this.lastHitZ, 1)) this._die();
   }
   _die() {
     this.dead = true;
     this.dying = 0;
     this.deadT = 0;
+    this.seq = null; this.overlay = null; this.idleOv = null;
+    this.stumbleT = 0;
     this.wantSpeed = 0;
     this.muscleGlobal = 0;
     this.muscle.fill(0);
