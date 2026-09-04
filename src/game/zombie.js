@@ -118,11 +118,12 @@ export class Zombie {
     this.dormant = false;
     this.attacks = 0; this.tackles = 0; this.pounces = 0; this.charges = 0; this.dropAttacks = 0;
     this.attackKinds = {};
-    // ritmo de los brincos y de los vuelos
+    // ritmo de los brincos y de los vuelos (los vuelos son un evento, no la regla:
+    // la mayoría te llega corriendo, y si te movés se estrella contra lo que haya)
     this.hopT = 0.8 + rng() * 2.5;
     this.excitedHops = 0;
-    this.pounceCool = 1.5 + rng() * 3;
-    this.chargeCool = 2 + rng() * 4;
+    this.pounceCool = 4 + rng() * 6;
+    this.chargeCool = 3 + rng() * 5;
   }
   get x() { return this.body.x; }
   get z() { return this.body.z; }
@@ -196,9 +197,9 @@ export class ZombieManager {
     if (playerDown) return pickW(rng, [['stomp', 5], ['bite', 2], ['double_rake', 1.5], ['slam_fists', Z.type === 'brute' ? 4 : 0]]);
     if (Z.type === 'brute') return pickW(rng, [['overhead', 3.5], ['slam_fists', 2.5], ['spin_swipe', 1.5], ['haymaker', 1.5], ['double', 1], ['backhand', 0.8]]);
     const fast = B.speed > 2.6 && dist < Z.reach + 0.6;
-    if (Z.traits.parkour && fast && rng() < 0.22) return 'flying_knee';
+    if (Z.traits.parkour && fast && rng() < 0.12) return 'flying_knee';
     if (Z.type === 'runner') {
-      if (fast && rng() < 0.28) return 'tackle';
+      if (fast && rng() < 0.22) return 'tackle';
       return pickW(rng, [['swipe', 3], ['double', 1.5], ['claw', 1.5], ['bite', 1], ['frenzy', 1.2], ['lunge_grab', 1], ['knee', 0.8], ['headbutt', 0.8], ['uppercut', 0.5], ['kick', 0.6]]);
     }
     if (Z.type === 'jogger') return pickW(rng, [['swipe', 3], ['double', 1.2], ['claw', 1.5], ['grab', 1], ['bite_neck', 1], ['backhand', 1], ['uppercut', 0.6], ['kick', 0.8], ['double_rake', 0.8], ['haymaker', 0.4]]);
@@ -241,6 +242,9 @@ export class ZombieManager {
     const dir = this._dir;
     const zs = this.zombies;
     let alive = 0;
+    // ¿cuántos están volando hacia el jugador ahora? (de a uno: un vuelo es un evento)
+    let fliers = 0;
+    for (let i = 0; i < zs.length; i++) { const Z = zs[i]; if (Z.state === 'attack' && ATTACKS[Z.attack] && ATTACKS[Z.attack].jump) fliers++; }
 
     for (let i = zs.length - 1; i >= 0; i--) {
       const Z = zs[i], B = Z.body;
@@ -362,25 +366,29 @@ export class ZombieManager {
           Z.dirX += (vx - Z.dirX) * k; Z.dirZ += (vz - Z.dirZ) * k;
           const dl = Math.hypot(Z.dirX, Z.dirZ) || 1;
           B.wantX = Z.dirX / dl; B.wantZ = Z.dirZ / dl;
-          // TODOS corren cuando persiguen (a lo Left 4 Dead); muy cerca frenan un poco para no pasarse
-          const near = dist < Z.reach + 0.4 ? 0.55 : 1;
+          // TODOS corren cuando persiguen (a lo Left 4 Dead). Los lentos frenan un
+          // poco muy cerca para no pasarse; el corredor NO: si te movés, te pasa de
+          // largo y se estrella contra lo que haya atrás
+          const near = dist < Z.reach + 0.4 && Z.type !== 'runner' ? 0.55 : 1;
           B.wantSpeed = Z.runSpeed * near * (B.crawling ? 0.45 : 1);
 
+          const playerUp = player.body.state === 'up' && player.body.upright;
           // — desde ARRIBA de algo (escritorio, mesa) y vos cerca y abajo: se tira encima —
           const high = B.groundY > w.groundY + 0.4 && B.groundY - player.body.groundY > 0.4;
-          if (high && playerAlive && dist > 0.9 && dist < 3.2 && Z.los && Z.pounceCool <= 0 && !B.vault && B.inControl) {
-            const p = Z.traits.parkour ? 0.9 : Z.type === 'runner' ? 0.6 : Z.type === 'brute' ? 0.05 : 0.3;
-            if (rng() < p) { Z.pounceCool = 3 + rng() * 2; this._startAttack(Z, 'drop', ux, uz, dist); break; }
+          if (high && playerAlive && playerUp && fliers === 0 && dist > 0.9 && dist < 3.2 && Z.los && Z.pounceCool <= 0 && !B.vault && B.inControl) {
+            const p = Z.traits.parkour ? 0.6 : Z.type === 'runner' ? 0.35 : Z.type === 'brute' ? 0.03 : 0.15;
+            if (rng() < p) { Z.pounceCool = 6 + rng() * 5; fliers++; this._startAttack(Z, 'drop', ux, uz, dist); break; }
+            Z.pounceCool = 1.5;
           }
-          // — a la carrera y a dos-tres metros: se LANZA en plancha —
-          if (playerAlive && dist > 2.0 && dist < 3.6 && Z.los && B.speed > 2.2 && Z.pounceCool <= 0 && B.inControl && !B.vault && !B.crawling) {
-            const rate = Z.traits.parkour ? 1.4 : Z.type === 'runner' ? 0.5 : Z.type === 'jogger' ? 0.18 : 0.06;
-            if (rng() < rate * dt) { Z.pounceCool = 2.5 + rng() * 3; this._startAttack(Z, 'pounce', ux, uz, dist); break; }
+          // — a la carrera y a dos-tres metros, cada tanto y de a uno: se LANZA en plancha —
+          if (playerAlive && playerUp && fliers === 0 && dist > 2.4 && dist < 3.6 && Z.los && B.speed > 2.4 && Z.pounceCool <= 0 && B.inControl && !B.vault && !B.crawling) {
+            const rate = Z.traits.parkour ? 0.45 : Z.type === 'runner' ? 0.12 : Z.type === 'jogger' ? 0.04 : 0.01;
+            if (rng() < rate * dt) { Z.pounceCool = 7 + rng() * 6; fliers++; this._startAttack(Z, 'pounce', ux, uz, dist); break; }
           }
           // — el bruto (y algún corredor) EMBISTE con el hombro desde tres metros —
-          if (playerAlive && dist > 2.2 && dist < 4.0 && Z.los && B.speed > 1.6 && Z.chargeCool <= 0 && B.inControl && !B.vault && Math.abs(angDelta(B.yaw, Math.atan2(ux, uz))) < 0.4) {
-            const rate = Z.type === 'brute' ? 0.7 : Z.type === 'runner' ? 0.15 : 0.03;
-            if (rng() < rate * dt) { Z.chargeCool = 3 + rng() * 3; this._startAttack(Z, 'charge', ux, uz, dist); break; }
+          if (playerAlive && playerUp && dist > 2.2 && dist < 4.0 && Z.los && B.speed > 1.6 && Z.chargeCool <= 0 && B.inControl && !B.vault && Math.abs(angDelta(B.yaw, Math.atan2(ux, uz))) < 0.4) {
+            const rate = Z.type === 'brute' ? 0.6 : Z.type === 'runner' ? 0.08 : 0.02;
+            if (rng() < rate * dt) { Z.chargeCool = 5 + rng() * 5; this._startAttack(Z, 'charge', ux, uz, dist); break; }
           }
           // — el que pega saltitos: brinca cada tanto mientras corre —
           if (Z.traits.hopper) {
@@ -419,9 +427,10 @@ export class ZombieManager {
           }
           if (Z.attack !== 'tackle') {
             if (B.stagger > 0.4 || !B.upright || !B.inControl) { Z.state = 'chase'; Z.cool = 1.0; B.wantSpeed = 0; break; }
-            // encarar al jugador y embestir un instante
+            // encarar al jugador y embestir un instante; el corredor manotea EN
+            // CARRERA y sigue de largo (si te corriste, se lleva puesta la pared)
             B.wantX = ux; B.wantZ = uz;
-            B.wantSpeed = Z.attackT < 0.16 ? Z.runSpeed * 0.9 + 0.8 : 0.15;
+            B.wantSpeed = Z.attackT < 0.16 ? Z.runSpeed * 0.9 + 0.8 : (Z.type === 'runner' ? Z.runSpeed * 0.8 : 0.15);
           }
           // uno o varios golpes (ráfaga, sacudida)
           const times = A.hits || [A.hitAt];

@@ -132,7 +132,9 @@ forma a los miembros sin empujar al conjunto, y el momento que traía se conserv
 **Velocidad con inercia.** La velocidad pedida por la IA o el jugador se rampa a 9 m/s² al
 acelerar y 14 al frenar. Arrancar y parar toman tiempo y el cuerpo se **inclina al esfuerzo**:
 la diferencia entre la velocidad que quiere y la que tiene se convierte en una inclinación del
-torso, adelante al arrancar, atrás al frenar.
+torso, adelante al arrancar, atrás al frenar. En las **curvas se inclina hacia adentro** (más
+cuanto más rápido), la cabeza **anticipa el giro** mirando adonde quiere ir antes de que el
+cuerpo llegue, y al **pivotar en el lugar** los pies dan pasitos laterales en vez de patinar.
 
 **Marcha por cinemática inversa.** No hay ciclo de caminata grabado. Cada pie sigue una
 trayectoria: apoyo lineal a la velocidad del cuerpo y vuelo en arco, con zancada proporcional a
@@ -221,6 +223,12 @@ mece sobre las rodillas cuando está quieto. Dos de cada diez hacen **parkour**:
 escritorios en kong o dash, o se tiran de cabeza por encima y ruedan; bajan saltando y ruedan
 al caer; rebotan en las paredes con el pie; se lanzan en plancha desde tres metros; se levantan
 con voltereta o de un salto; y se les nota la agilidad en todo lo demás.
+
+Los vuelos son un **evento, no la regla**: de a uno por vez y con varios segundos de enfriamiento.
+La mayoría te llega corriendo, y el corredor no frena cerca tuyo: si te corrés, te pasa de largo
+manoteando y se estrella contra lo que haya atrás. La plancha que **te agarra** cae encima y te
+tira; la que falla, el corredor la aterriza de pie, tambalea y sigue corriendo (el de parkour
+rueda, el caminante cae de panza).
 
 | Ataque | Quién | Qué hace |
 |---|---|---|

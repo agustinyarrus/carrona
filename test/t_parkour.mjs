@@ -117,16 +117,29 @@ console.log('\n── lanzarse ──');
   const started = Z.pounce(0, 3.0);
   let peak = 0, landed = -1, dive = false;
   run(w, 3, (t) => { peak = Math.max(peak, Z.py(HIP)); if (Z.flight && Z.flight.style === 'superman') dive = true; if (landed < 0 && Z.landedJump) landed = t; });
-  ok('vuela en plancha, aterriza cerca de los 3 m y cae de panza', started && dive && peak > 1.15 && landed > 0.3 && Z.lastFall === 'fall_pounce_miss', `cadera máx ${peak.toFixed(2)} aterrizó a ${landed.toFixed(2)} s z=${Z.z.toFixed(2)}`);
+  ok('vuela en plancha, aterriza sobre el blanco y cae encima (lo agarró)', started && dive && peak > 1.15 && landed > 0.3 && Z.pounceHit && Z.lastFall === 'fall_pounce_hit', `cadera máx ${peak.toFixed(2)} aterrizó a ${landed.toFixed(2)} s z=${Z.z.toFixed(2)} ${Z.lastFall}`);
   run(w, 5);
   ok('y se levanta después', Z.upright && Z.state === 'up', Z.lastGetUp);
+  // el corredor que FALLA (el blanco se corrió) cae parado, tambalea y sigue; el caminante cae de panza
+  const w3 = world();
+  const Zr = body(w3, { seed: 8, ...RUNNER, traits: { agility: 0.65 } });
+  run(w3, 0.5);
+  Zr.pounce(0, 3.0); if (Zr.jumpPrep) Zr.jumpPrep.J.target = { x: 9, z: 9 };
+  let fellR = false;
+  run(w3, 3, () => { if (Zr.state === 'falling' || Zr.state === 'down') fellR = true; });
+  const w4 = world();
+  const Zw = body(w4, { seed: 9, kind: 'walker', traits: { agility: 0.1 } });
+  run(w4, 0.5);
+  Zw.pounce(0, 3.0); if (Zw.jumpPrep) Zw.jumpPrep.J.target = { x: 9, z: 9 };
+  run(w4, 3);
+  ok('si falla: el corredor puede caer parado y seguir; el caminante cae de panza', (!fellR || Zr.lastFall === 'fall_pounce_miss') && Zw.lastFall === 'fall_pounce_miss' && !Zr.pounceHit && !Zw.pounceHit, `corredor cayó=${fellR} (${Zr.lastFall || 'de pie, ' + Zr.stumbles + ' tambaleos'}) · caminante ${Zw.lastFall}`);
   // parkour: si falla, rueda en vez de caer de panza
   const w2 = world();
   const Zp = body(w2, { seed: 7, ...RUNNER, traits: { parkour: true } });
   run(w2, 0.5);
-  Zp.pounce(0, 3.0, { roll: true });
+  Zp.pounce(0, 3.0, { roll: true }); if (Zp.jumpPrep) Zp.jumpPrep.J.target = { x: 9, z: 9 };
   run(w2, 3.5);
-  ok('el de parkour sale rodando del salto', Zp.rolls >= 1 && Zp.upright && Zp.state === 'up', `${Zp.lastMove} rolls=${Zp.rolls}`);
+  ok('el de parkour sale rodando del salto fallido', Zp.rolls >= 1 && Zp.upright && Zp.state === 'up', `${Zp.lastMove} rolls=${Zp.rolls}`);
 }
 
 // ── 6. PARED: el jugador la atrapa con las manos; el parkour rebota con el pie ─
@@ -152,6 +165,25 @@ console.log('\n── pared ──');
   let fell3 = false;
   run(w3, 4, () => { if (Wk.state === 'falling' || Wk.state === 'down') fell3 = true; if (Wk.slams > 0) Wk.wantSpeed = 0; });
   ok('el torpe se estrella y cae con una variante de pared', Wk.slams >= 1 && fell3 && /fall_wall|fall_back|fall_side|fall_over/.test(Wk.lastFall), Wk.lastFall);
+  // los corredores comunes (sin parkour) se ESTRELLAN casi siempre: es el show
+  let crashes = 0;
+  for (let k = 0; k < 6; k++) {
+    const w4 = world([[0, 1.5, 4.0, 3, 1.5, 0.15]]);
+    const Rn = body(w4, { seed: 20 + k, ...RUNNER });
+    Rn.wantX = 0; Rn.wantZ = 1; Rn.wantSpeed = 3.8;
+    let fell4 = false;
+    run(w4, 3.5, () => { if (Rn.state === 'falling' || Rn.state === 'down') fell4 = true; if (Rn.slams > 0 || Rn.wallKicks > 0) Rn.wantSpeed = 0; });
+    if (fell4) crashes++;
+  }
+  ok('seis corredores contra la pared: al menos cinco se estrellan y caen', crashes >= 5, `${crashes}/6`);
+  // inclinarse en las curvas: corriendo en círculo la cabeza se va hacia adentro del giro
+  const w5 = world();
+  const Rc = body(w5, { seed: 30, ...RUNNER });
+  Rc.wantX = 0; Rc.wantZ = 1; Rc.wantSpeed = 3.6;
+  run(w5, 2.5);
+  let lat = 0, n = 0;
+  run(w5, 3, (t) => { const a = t * 1.3; Rc.wantX = Math.sin(a); Rc.wantZ = Math.cos(a); Rc.wantSpeed = 3.6; if (t > 0.6) { const dx = Rc.px(HEAD) - Rc.px(HIP), dz = Rc.pz(HEAD) - Rc.pz(HIP); lat += dx * Rc.rx + dz * Rc.rz; n++; } });
+  ok('corriendo en curva hacia la derecha se inclina hacia adentro (cabeza a la derecha de la cadera)', lat / n > 0.02 && Rc.upright, `${(lat / n * 100).toFixed(1)} cm promedio, v=${Rc.speed.toFixed(2)}`);
 }
 
 // ── 7. CHOQUES: el jugador que embiste a un zombi no se cae ─────────────────

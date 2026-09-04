@@ -449,6 +449,12 @@ export class Ragdoll {
     if (this.recoil > 0) this.recoil = Math.max(0, this.recoil - dt * 7);
     this.hitJ *= Math.exp(-dt * 6);
     if (this.spin) { if (!this.lockYaw) this.yaw += this.spin * dt; this.spin *= Math.exp(-dt * 5); if (Math.abs(this.spin) < 0.05) this.spin = 0; }
+    // — cuánto está girando (rad/s, suavizado): para inclinarse en las curvas y
+    //   dar pasitos al pivotar en el lugar —
+    if (dt > 0) {
+      const raw = angDelta(this._prevYaw ?? this.yaw, this.yaw) / dt;
+      this.yawRate = (this.yawRate || 0) + (clamp(raw, -12, 12) - (this.yawRate || 0)) * (1 - Math.pow(0.01, dt));
+    }
 
     // — heridas: los miembros recuperan fuerza hasta su piso; pierna doblada, brazo colgando —
     const mus = this.muscle, floor = this.muscleFloor, LM = this.limbMul;
@@ -757,7 +763,9 @@ export class Ragdoll {
     let cadence = this.speed / strideLen;
     if (this.pers.lurch && this.gait < 0.5) cadence *= 1 + Math.sin(this.phase * 0.5) * this.pers.lurch * 0.5;
     const idle = this.wantSpeed > 0.05 || stumbling ? 0.35 : 0.13;
-    this.phase = (this.phase + (cadence + idle) * TAU * dt) % TAU;
+    // pivotando en el lugar los pies dan pasitos (la fase avanza aunque no se traslade)
+    const pivotCad = this.state === 'up' && Math.abs(this.yawRate || 0) > 1.2 && this.speed < 0.8 ? clamp01((Math.abs(this.yawRate) - 1.2) / 3) * 1.3 : 0;
+    this.phase = (this.phase + (cadence + idle + pivotCad) * TAU * dt) % TAU;
     this.idleT += dt;
 
     // — de pie y se cayó sin director (lo aplastaron, lo pisaron, física pura):
@@ -816,6 +824,7 @@ export class Ragdoll {
     }
     // el empuje desde el piso vale por un frame: hay que pedirlo cada vez
     this.driveV = 0;
+    this._prevYaw = this.yaw;
   }
 
   _daze() {
@@ -1132,7 +1141,10 @@ export class Ragdoll {
     const stumbling = this.stumbleT > 0;
     // un poco de irregularidad en el ciclo: nadie camina como un metrónomo
     const ph = this.phase + P.phaseOff + Math.sin(this.idleT * 1.7 + P.phaseOff) * P.jitter * 0.22;
-    const moving = stumbling ? 1 : clamp01(this.wantSpeed / 1.0);        // 0 quieto … 1 caminando
+    // pivotar en el lugar: pasitos laterales hacia donde gira (los pies no patinan al darse vuelta)
+    const yr = this.yawRate || 0;
+    const pivot = this.wantSpeed < 0.3 && !stumbling ? clamp01((Math.abs(yr) - 1.2) / 3) * (1 - clamp01(this.speed / 0.8)) : 0;
+    const moving = stumbling ? 1 : Math.max(clamp01(this.wantSpeed / 1.0), pivot * 0.55);   // 0 quieto … 1 caminando
     // zancada (medio paso, desde la cadera) y altura del pie en vuelo
     const st = this.stride * S * lerp(0.8, 2.0, g) * this._sp('strideMul', 1) * (stumbling ? 0.7 : 1);
     const lift = lerp(0.05, 0.30, g) * S * (this.isPlayer ? 1.2 : 1) * this._sp('lift', 1) * (1 + this._sp('stomp') * 0.5);
@@ -1157,7 +1169,7 @@ export class Ragdoll {
       T[CHEST * 3 + 2] += crouch * 0.45; T[NECK * 3 + 2] += crouch * 0.6; T[HEAD * 3 + 2] += crouch * 0.7;
     }
 
-    // dirección del paso en coordenadas locales (pasos laterales / hacia atrás / tambaleo)
+    // dirección del paso en coordenadas locales (pasos laterales / hacia atrás / tambaleo / pivote)
     let sdx = 0, sdz = 1;
     if (stumbling || this.wantSpeed > 0.05) {
       const c = Math.cos(this.yaw), s = Math.sin(this.yaw);
@@ -1165,7 +1177,7 @@ export class Ragdoll {
       sdz = wx * s + wz * c;
       sdx = wx * c - wz * s;
       const l = Math.hypot(sdx, sdz) || 1; sdx /= l; sdz /= l;
-    }
+    } else if (pivot > 0.05) { sdx = yr > 0 ? 1 : -1; sdz = 0; }
 
     // — piernas: trayectoria del pie + rodilla por IK de dos huesos —
     //  Apoyo [0,π): el pie va de +st a -st LINEAL (a la velocidad del cuerpo:
@@ -1231,6 +1243,22 @@ export class Ragdoll {
       T[HEAD * 3] += ldx * whip * 1.5; T[HEAD * 3 + 2] += ldz * whip * 1.5;
       const armsUp = bell(u, 0.3) * 0.18 * S;
       T[HAL * 3 + 1] += armsUp; T[HAR * 3 + 1] += armsUp; T[HAL * 3] -= armsUp * 0.8; T[HAR * 3] += armsUp * 0.8;
+    }
+    // — inclinarse EN LAS CURVAS: el tronco y la cabeza se van hacia el lado al que
+    //   gira, más cuanto más rápido corre (un corredor que dobla no va derecho) —
+    {
+      const bank = clamp(yr * this.speed * 0.014, -0.11, 0.11) * S * (1 - this.airborne);
+      if (bank) {
+        T[CHEST * 3] += bank * 0.5; T[NECK * 3] += bank * 0.8; T[HEAD * 3] += bank * 1.0;
+        T[SHL * 3] += bank * 0.65; T[SHR * 3] += bank * 0.65;
+        T[HEAD * 3 + 1] -= Math.abs(bank) * 0.25;
+      }
+      // — la cabeza ANTICIPA el giro: mira hacia donde quiere ir antes de que el cuerpo llegue —
+      if (!this.lockYaw && this.wantSpeed > 0.1 && !this.lookX && !this.lookZ) {
+        const ant = clamp(angDelta(this.yaw, Math.atan2(this.wantX, this.wantZ)), -0.7, 0.7) * moving;
+        T[HEAD * 3] += Math.sin(ant) * 0.07 * S; T[HEAD * 3 + 2] += (Math.cos(ant) - 1) * 0.07 * S;
+        T[NECK * 3] += Math.sin(ant) * 0.03 * S;
+      }
     }
     // — mirar al objetivo: la cabeza se orienta hacia donde está el jugador —
     if (this.lookX || this.lookZ) {
@@ -1954,8 +1982,9 @@ export class Ragdoll {
     // — el que hace parkour, rápido y no de frente del todo: planta un pie en la pared y se impulsa —
     if (this.traits.parkour && !lowEdge && speed > 2.8 && headOn > 0.4 && R() < 0.65) { if (this.wallKick(nx, nz, speed)) return; }
     // — el ÁGIL atrapa la pared con las manos: rebota, tambalea hacia atrás y NO se cae
-    //   (el jugador siempre, salvo estrellarse de frente muy rápido; el resto según agilidad) —
-    const catches = !lowEdge && (this.isPlayer ? !(headOn > 0.85 && speed > 5.0 && R() < 0.35) : R() < ag * 0.85);
+    //   (el jugador siempre, salvo estrellarse de frente muy rápido; de los zombis sólo
+    //   los de parkour, y no siempre: el resto se la lleva por delante, que es el show) —
+    const catches = !lowEdge && (this.isPlayer ? !(headOn > 0.85 && speed > 5.0 && R() < 0.35) : (ag >= 0.8 && R() < 0.6));
     if (catches) {
       this.slamCool = 0.8;
       const L = this._local(nx, nz);
@@ -2047,6 +2076,8 @@ export class Ragdoll {
         def = SEQ.fall_over_edge;
       } else if (cause === 'pounce_miss') {
         def = SEQ.fall_pounce_miss;
+      } else if (cause === 'pounce_hit') {
+        def = SEQ.fall_pounce_hit;
       } else if (cause === 'slip') {
         def = SEQ.fall_slip;
       } else if (power >= 1.9 && cause !== 'trip') {
@@ -2156,7 +2187,7 @@ export class Ragdoll {
     const R = this.rng || Math.random;
     const g = -this.world.gravity;
     const J = { style: def.name, def, v0, vx, vz, y0: this.groundY > -900 ? this.groundY : 0, t: 0, dur: Math.max(0.05, 2 * v0 / g),
-      s: opt.s ?? (R() < 0.5 ? 1 : 0), ph: R() * TAU, land: opt.land || 'crouch', dive: !!opt.dive, attack: opt.attack || null, hit: false };
+      s: opt.s ?? (R() < 0.5 ? 1 : 0), ph: R() * TAU, land: opt.land || 'crouch', dive: !!opt.dive, attack: opt.attack || null, target: opt.target || null, hit: false };
     const prep = opt.prep ?? def.prep;
     if (prep > 0.001) this.jumpPrep = { t: 0, dur: prep, style: def.name, J };
     else this._takeoff({ J });
@@ -2184,9 +2215,22 @@ export class Ragdoll {
     this.landCrouch = Math.max(this.landCrouch, Math.min(0.6, J.def.land + drop * 0.25));
     const fwdV = J.vx * Math.sin(this.yaw) + J.vz * Math.cos(this.yaw);
     if (J.land === 'run') this.curSpeed = Math.hypot(J.vx, J.vz);
-    // se tiró de cabeza (pounce, dive): rueda si sabe y venía derecho; si no, de panza
+    // se tiró de cabeza (pounce, dive)
     if (J.dive) {
+      // ¿cayó encima de lo que buscaba? → lo agarra: cae sobre él y se queda un instante
+      const hit = J.target && Math.hypot(this.x - J.target.x, this.z - J.target.z) < 1.05 * this.scale;
+      this.pounceHit = !!hit;
+      if (hit && J.attack) { this.fall('pounce_hit', J.vx, J.vz, 1); return; }
+      // falló: el de parkour rueda; el corredor cae parado, tambalea y SIGUE corriendo; el resto de panza
       if (J.land === 'roll' && fwdV > 1.2 && this.upright) { this.playMove(this.traits.parkour ? 'roll_shoulder' : 'roll_fwd', { s: J.s }); return; }
+      if (this.traits.agility >= 0.5 && this.upright && R() < 0.65) {
+        this.landCrouch = Math.max(this.landCrouch, 0.55);
+        this.stagger = Math.min(0.9, this.stagger + 0.4);
+        this.curSpeed = Math.hypot(J.vx, J.vz) * 0.6;
+        this.stumble(J.vx, J.vz, 2.4, 0.4);
+        this.playOverlay('fl_balance_arms', 1, { sx: 1, along: 1, lat: 0 });
+        return;
+      }
       this.fall('pounce_miss', J.vx, J.vz, 1);
       return;
     }
@@ -2217,7 +2261,7 @@ export class Ragdoll {
     const v0 = clamp(2.0 + d * 0.55, 2.4, 4.0);
     const fl = 2 * v0 / -this.world.gravity;
     const sp = Math.min(7.5, (d + 0.25) / fl);
-    if (!this.jump('superman', v0, dx / d * sp, dz / d * sp, { land: opt.roll ? 'roll' : 'pounce', dive: true, attack: 'pounce', prep: 0.10 })) return false;
+    if (!this.jump('superman', v0, dx / d * sp, dz / d * sp, { land: opt.roll ? 'roll' : 'pounce', dive: true, attack: 'pounce', prep: 0.10, target: { x: tx, z: tz } })) return false;
     this.pounces++;
     return true;
   }

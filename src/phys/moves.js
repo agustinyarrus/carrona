@@ -1329,6 +1329,17 @@ SEQ.fall_knees_slide = {
     K(1.40, P.prone, { mus: 0.03 }),
   ],
 };
+SEQ.fall_pounce_hit = {
+  // se lanzó y LO AGARRÓ: cae encima, las manos aferradas, y se queda un instante sobre él
+  kind: 'fall', dur: 1.0, minT: 0.45, brace: false, quickUp: true,
+  imp: [[HEAD, 1.2, -0.6, 0], [CHEST, 1.4, -0.8, 0], [HAL, 1.8, -0.3, 0], [HAR, 1.8, -0.3, 0], [HIP, 1.0, -0.2, 0]],
+  keys: [
+    K(0.00, P.airSuperman, { mus: 0.55, fwd: 0.9 }),
+    K(0.30, P.pushupLow, { mus: 0.30, fwd: 0.3 }),
+    K(0.65, P.pushupLow, { mus: 0.20 }),
+    K(1.00, P.prone, { mus: 0.08 }),
+  ],
+};
 SEQ.fall_pounce_miss = {
   // se lanzó y no agarró a nadie: aterriza de panza y resbala
   kind: 'fall', dur: 1.1, minT: 0.5, brace: false, quickUp: true,
