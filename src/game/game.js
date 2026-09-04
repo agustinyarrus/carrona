@@ -133,7 +133,7 @@ export class Game {
     for (let i = 0; i < 26; i++) {
       const p = this.nav.randomWalkable(this.rng);
       if (!p) continue;
-      const Z = this.zm.spawn(this.rng() < 0.12 ? 'brute' : 'walker', p.x, p.z, this.rng() * TAU, true);
+      const Z = this.zm.spawn(this.rng() < 0.12 ? 'brute' : 'walker', p.x, p.z, this.rng() * TAU, true, this._restPose());
       paintBody(Z.body, this.rng, { zombie: true });
       Z.hp = 1e9;
     }
@@ -170,8 +170,27 @@ export class Game {
     this.audio.setIntensity(0.15);
   }
 
-  _spawnZombie(type, x, z, yaw, asleep) {
-    const Z = this.zm.spawn(type, x, z, yaw, asleep);
+  /** Pose de descanso para un zombi dormido (o null: deambula). */
+  _restPose() {
+    const r = this.rng();
+    return r < 0.45 ? null : r < 0.6 ? 'sit' : r < 0.7 ? 'kneel' : r < 0.82 ? 'supine' : r < 0.92 ? 'prone' : 'side';
+  }
+
+  /** Dormidos por la oficina, lejos del jugador: se despiertan cuando los ves o hacés ruido. */
+  _spawnSleepers(n) {
+    const P = this.player;
+    for (let k = 0, tries = 0; k < n && tries < 60; tries++) {
+      const p = this.nav.randomWalkable(this.rng);
+      if (!p || Math.hypot(p.x - P.x, p.z - P.z) < 11) continue;
+      const r = this.rng();
+      const type = (this.wave >= 4 && r < 0.1) ? 'brute' : r < 0.45 ? 'runner' : r < 0.75 ? 'jogger' : 'walker';
+      this._spawnZombie(type, p.x, p.z, this.rng() * TAU, true, this._restPose() || 'sit');
+      k++;
+    }
+  }
+
+  _spawnZombie(type, x, z, yaw, asleep, rest = null) {
+    const Z = this.zm.spawn(type, x, z, yaw, asleep, rest);
     paintBody(Z.body, this.rng, { zombie: true });
     Z.hp = type === 'brute' ? 300 : type === 'runner' ? 75 : type === 'jogger' ? 95 : 110;
     return Z;
@@ -282,7 +301,7 @@ export class Game {
     // ir soltando zombis por las puertas
     if (this.waveLeft > 0) {
       this.spawnT -= dt;
-      const maxAlive = Math.min(12 + this.wave * 3, 44);
+      const maxAlive = Math.min(8 + this.wave * 3, 40);   // ahora todos corren: menos a la vez
       if (this.spawnT <= 0 && this.zm.alive < maxAlive) {
         this.spawnT = Math.max(0.25, 1.3 - this.wave * 0.08) * (0.6 + this.rng() * 0.8);
         // puerta lejos del jugador
@@ -315,12 +334,14 @@ export class Game {
   _startWave(n) {
     this.wave = n; this.stats.wave = n;
     this.waveActive = true;
-    this.waveTotal = 6 + n * 4 + Math.floor(n * n * 0.4);
+    this.waveTotal = 5 + n * 4 + Math.floor(n * n * 0.4);
     this.waveLeft = this.waveTotal;
     this.spawnT = 0.5;
     this.ui.announce('OLEADA ' + n, n === 1 ? 'vienen por las puertas' : ['más y más rápido', 'no te quedes quieto', 'la horda crece', 'apuntá a la cabeza'][n % 4]);
     this.audio.waveSting(n);
     this.zm.alertAll(this.player.x, this.player.z, 30);
+    // y algunos dormidos por los rincones, que se despiertan cuando los ves o hacés ruido
+    this._spawnSleepers(2 + Math.min(n, 5));
   }
 
   // ═══ disparo ══════════════════════════════════════════════════════════════
@@ -375,7 +396,7 @@ export class Game {
         }
         if (Z && !body.dead) {
           Z.hp -= res.damage;
-          Z.alert = true; if (Z.state === 'idle') Z.state = 'chase';
+          if (!Z.alert) { Z.wakeUp(); Z.reactT = 0.08; }   // un tiro despierta ya
           if (Z.hp <= 0) {
             body.kill(res.zone === 0 || def.key === 'shotgun');
             // un tiro en la cabeza al morir la vuela un poco
@@ -409,7 +430,7 @@ export class Game {
     w.addImpulse(B.p[CHEST], -dx * 8 * def.kick, 0, -dz * 8 * def.kick);
     P.onFired(def);
     this.audio.shot(def.key);
-    this.zm.alertAll(P.x, P.z, 26);
+    this.zm.alertAll(P.x, P.z, 16);
   }
 
   _shove() {
@@ -428,11 +449,11 @@ export class Game {
   _hooks() {
     if (this._hk) return this._hk;
     this._hk = {
-      onAttack: (Z, dmg, ux, uz) => {
+      onAttack: (Z, dmg, ux, uz, kind = 'swipe') => {
         const P = this.player;
-        const died = P.damage(dmg, Z.x, Z.z);
-        // el bruto tumba: física pura, se cae, y hay que levantarse
-        if (Z.type === 'brute' && !died) { P.body.knockback(ux, uz, 1.6, 0.4); this.R.addShake(0.4 * this.settings.shake); }
+        const died = P.damage(dmg, Z.x, Z.z, kind);
+        // el mazazo del bruto y el tacle del corredor tumban: hay que levantarse
+        if (!died && (kind === 'overhead' || kind === 'tackle')) { P.body.knockback(ux, uz, kind === 'overhead' ? 1.6 : 1.35, 0.4); this.R.addShake(0.4 * this.settings.shake); }
         this.audio.bite(Z.x, Z.z);
         this.audio.hurt();
         this.R.addShake(0.45 * this.settings.shake);

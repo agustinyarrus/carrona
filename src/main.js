@@ -129,10 +129,13 @@ function boot() {
   let last = performance.now();
   let hidden = false;
   document.addEventListener('visibilitychange', () => { hidden = document.hidden; last = performance.now(); });
+  let errCount = 0;
   const loop = (now) => {
     const dt = Math.min(1 / 30, Math.max(1 / 240, (now - last) / 1000));
     last = now;
-    if (!hidden) game.update(dt);
+    // un error en un frame no puede matar el bucle (el juego quedaría congelado
+    // con el HUD vivo): se registra y se sigue
+    if (!hidden) { try { game.update(dt); } catch (e) { if (errCount++ < 5) console.error('frame:', e); } }
     requestAnimationFrame(loop);
   };
   requestAnimationFrame(loop);

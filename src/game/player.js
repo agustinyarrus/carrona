@@ -36,6 +36,7 @@ export class Player {
     this.kills = 0; this.headshots = 0; this.severs = 0; this.shots = 0; this.hitsLanded = 0;
     this.deathT = 0;
     this.damageFlash = 0;
+    this.grabbed = 0;      // agarrado por un zombi: camina lento un instante
   }
 
   get x() { return this.body.x; }
@@ -63,7 +64,8 @@ export class Player {
     if (vl > 1e-4) { vx /= vl; vz /= vl; }
     const mag = clamp01(vl);
     this.moving = mag;
-    const slow = B.stagger > 0.25 ? 0.35 : 1;
+    if (this.grabbed > 0) this.grabbed -= dt;
+    const slow = (B.stagger > 0.25 ? 0.35 : 1) * (this.grabbed > 0 ? 0.35 : 1);
     B.wantCrouch = !!input.crouch && !input.run;
     const crouchF = 1 - 0.5 * B.crouch;
     const speed = (input.run ? this.runSpeed : this.walkSpeed) * slow * crouchF * (B.crawling ? 0.4 : 1);
@@ -110,7 +112,7 @@ export class Player {
   }
 
   /** Daño recibido. Devuelve true si murió con este golpe. */
-  damage(amount, fromX, fromZ) {
+  damage(amount, fromX, fromZ, kind = 'swipe') {
     if (!this.alive) return false;
     this.hp -= amount;
     this.hurtT = 0;
@@ -123,6 +125,13 @@ export class Player {
     w.addImpulse(B.p[HIP], dx * 30, 6, dz * 30);
     w.addImpulse(B.p[HEAD], dx * 12, 4, dz * 12);
     B.stagger = Math.min(0.6, B.stagger + 0.22);
+    // el golpe se ve: pasos de tambaleo hacia atrás y el torso que se pliega o se arquea
+    if (B.state === 'up') {
+      const L = B._local(dx, dz);
+      B.stumble(dx, dz, 1.4 + amount * 0.03, 0.30);
+      B.playOverlay(L.along < -0.3 ? 'fl_chest_fold' : L.along > 0.3 ? 'fl_back_arch' : 'fl_side_lean', 0.9, { sx: L.lat > 0 ? 1 : -1, along: L.along, lat: L.lat });
+    }
+    if (kind === 'grab') this.grabbed = Math.max(this.grabbed, 0.7);
     if (this.hp <= 0) {
       this.hp = 0;
       this.alive = false;
