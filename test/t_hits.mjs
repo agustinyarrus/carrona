@@ -64,6 +64,7 @@ const world = () => { const w = new PhysWorld(); w.groundHX = 30; w.groundHZ = 3
 {
   const w = world();
   const B = new Ragdoll(w, { x: 0, z: 0, yaw: 0, rng: makeRng(3), ...REACH });
+  B.idleNext = 99;   // sin tics de quieto: acá se mide el músculo del brazo, no si se rasca o vomita
   run(w, 1);
   const hand0 = B.py(HAL);
   B.hit(B_UARML, 0.5, 30, [0, 0, -6]);

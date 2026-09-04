@@ -65,7 +65,8 @@ const nanFree = (w) => { for (let i = 0; i < w.pn; i++) if (Number.isNaN(w.px[i]
   let minHead = 9, landCrouchSeen = 0, fell = false;
   run(w, 4, () => { if (Z.z > 0.9) { minHead = Math.min(minHead, Z.py(HEAD)); landCrouchSeen = Math.max(landCrouchSeen, Z.landCrouch); if (!Z.upright) fell = true; } });
   ok('llegó abajo', Z.z > 1.2 && Z.py(FTL) < 0.2, `z=${Z.z.toFixed(2)} pie=${Z.py(FTL).toFixed(2)}`);
-  ok('al aterrizar flexionó (cabeza bajó de 1.55)', minHead < 1.55, `cabeza mín ${minHead.toFixed(2)} landCrouch ${landCrouchSeen.toFixed(2)}`);
+  // o bien se dejó caer y flexionó al aterrizar, o bien vio el borde y bajó con un guion (paso, sentado, brinco)
+  ok('al aterrizar flexionó, o bajó con guion', minHead < 1.55 || (Z.descents >= 1 && Z.lastDescent !== 'walk'), `cabeza mín ${minHead.toFixed(2)} landCrouch ${landCrouchSeen.toFixed(2)} bajada=${Z.lastDescent || '-'}`);
   ok('y no se cayó', !fell && Z.upright);
 }
 

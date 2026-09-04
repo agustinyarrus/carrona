@@ -5,8 +5,10 @@
 **Zombis top-down en una oficina de noche. Todos los cuerpos son ragdoll activo, todo el tiempo.**
 
 Motor de física propio, músculos que son controladores PD, marcha por cinemática inversa y una
-biblioteca de movimientos físicos: quince maneras de levantarse, once de caer, seis de morir,
-diez sacudones por tiro, seis ataques, ocho tics y cien combinaciones de estilo de marcha.
+biblioteca de movimientos físicos: veinticinco maneras de levantarse, veintidós de caer, seis de
+morir, trece de saltar, seis de trepar, veintiún sacudones por tiro, veinte ataques, once tics y
+seiscientas combinaciones de estilo de marcha. Uno de cada cinco zombis pega saltitos; dos de
+cada diez hacen parkour.
 Un `index.html`, módulos ES, Three.js vendorizado. Cero dependencias que instalar, cero archivos
 de textura o de sonido: todo es procedural.
 
@@ -49,11 +51,11 @@ Python 3 en el PATH y Chrome o Edge. Los módulos ES no cargan desde `file://`, 
 |---|---|
 | WASD / flechas | moverse (relativo a la cámara) |
 | Shift | correr (el arma baja, el cuerpo se inclina al arrancar) |
-| C / Ctrl | agacharse |
+| C / Ctrl | agacharse. C tocada mientras corrés: **rodada de esquive** |
 | mouse | apuntar. Click dispara (mantener en las automáticas) |
 | R | recargar |
 | 1 a 4 | cambiar de arma |
-| Espacio | empujón, o trepar si hay un mueble adelante |
+| Espacio | trepar lo que tenga adelante; corriendo sin nada adelante, **saltar**; si no, empujón. En el piso: levantarse ya |
 | Q / E | girar la cámara 45° |
 | rueda | acercar o alejar la cámara |
 | F | linterna |
@@ -63,6 +65,10 @@ Python 3 en el PATH y Chrome o Edge. Los módulos ES no cargan desde `file://`, 
 Armas: pistola (munición infinita), subfusil desde la oleada 2, escopeta desde la 3, fusil desde
 la 5 (atraviesa un cuerpo). La cabeza recibe daño ×4. Los miembros se cortan con daño acumulado
 y sin una pierna el zombi se arrastra. Entre oleadas caen munición, botiquines y armas.
+
+El jugador es **ágil**: contra una pared a toda velocidad atrapa con las manos y rebota (no se
+desarma), se lleva puesto a un zombi con el hombro sin caerse, y tirado en el piso no espera:
+apretando una dirección rueda de costado o gatea hacia allá y se levanta en la carrera.
 
 ## El core
 
@@ -137,11 +143,17 @@ correr son la misma marcha mezclada por velocidad: rodilla mínima de 125°, 103
 sube 16, 26 y 34 cm. Los codos también salen por IK.
 
 **Estilos de marcha** (`moves.js`): cada cuerpo sortea al nacer un estilo de caminar y uno de
-correr, y los mezcla según la marcha. Diez de correr (sprint, carga con los brazos atrás,
-agitando los brazos, a zancadas, como un toro con la cabeza gacha, molinete, rengo, agachado,
-pisando fuerte, a saltos) y diez de caminar (arrastrando los pies, arrastrando una pierna,
-tieso, encorvado, con los brazos extendidos, con tics, bamboleándose, ladeado, tambaleante,
-rengo). Cien combinaciones: una horda no se ve clonada.
+correr, y los mezcla según la marcha. **Treinta de correr**: sprint, carga con los brazos
+atrás, agitando los brazos, a zancadas, como un toro con la cabeza gacha, molinete, rengo,
+agachado, pisando fuerte, a saltos, garras al frente, el clásico con los brazos tiesos,
+**brazos sin músculo que cuelgan y se sacuden** (física pura), un brazo en alto, abrazándose,
+las manos en la cabeza, gorila con los nudillos rozando el piso, gritando con la cabeza atrás,
+brazos como alas hacia atrás, manos altas a agarrarte, atleta, brazos cruzados, medio de
+costado, galope (las piernas fuera de contrafase), rebotando, en puntas de pie, arrastrando
+los pies, borracho en zigzag, echado atrás, piernas tiesas. **Veinte de caminar**: arrastrando
+los pies, arrastrando una pierna, tieso, encorvado, brazos extendidos, con tics, bamboleándose,
+ladeado, tambaleante, rengo, gateando casi, con jaqueca, abrazado, garras, orgulloso, cangrejo,
+delicado, elástico, arrastrando, aullando. Seiscientas combinaciones: una horda no se ve clonada.
 
 **Máquina de estados y biblioteca de movimientos** (`moves.js`). Un movimiento es una
 secuencia de poses objetivo generadas por funciones, con un perfil de músculo por miembro,
@@ -150,11 +162,14 @@ la física hace el resto: por eso una levantada choca con el escritorio de al la
 
 | Estado | Qué corre |
 |---|---|
-| de pie | la marcha con su estilo, más **overlays** que se suman sin interrumpirla: diez sacudones por tiro (la cabeza se va, el pecho se pliega, la espalda se arquea, se dobla por el estómago, el hombro lo gira, el brazo vuela, la cadera se va, se ladea, la pierna da un saltito, sacudida entera), seis ataques y ocho tics de quieto |
+| de pie | la marcha con su estilo, más **overlays** que se suman sin interrumpirla: **veintiún sacudones** por tiro (la cabeza se va, latigazo, el pecho se pliega, la espalda se arquea, se dobla por el estómago, el hombro lo gira, el brazo vuela, la cadera se va o se tuerce, se ladea, la pierna da un saltito, las rodillas ceden, se agarra el brazo, la cara o la panza, convulsión, encogerse de hombros, brazos buscando el equilibrio, casi se desploma), **cinco heridas sostenidas** (una mano apretando la cabeza, la panza, el hombro o el muslo mientras sigue andando), **veinte ataques** y once tics de quieto |
 | tambaleo | pasos reales en la dirección del golpe con latigazo del torso; la raíz se va con él y el cuerpo **queda desplazado**, no vuelve como una goma |
-| cayendo | una de **once caídas** elegida por causa y ángulo: sentarse de espaldas, de tabla, de boca, de rodillas y de boca, de costado, girando, desplomarse, volando, voltereta (el corredor), rebote contra la pared, tacle |
-| tirado | física pura, aturdido un tiempo que depende del tipo (el corredor 0.35 s, el bruto 1.3 s) |
-| levantándose | una de **quince levantadas** elegida por cómo quedó. Boca arriba: abdominal, rodar y empujar, de un salto, pesada, rodar y gatear. Boca abajo: flexión, rodilla primero, rodar y sentarse, gatear, rápida. De costado: a boca abajo, a boca arriba, sobre el codo. Y desde arrodillado o sentado. El peso de cada una depende del tipo de cuerpo |
+| saltando | agachada previa sin cortar la marcha, patada real a todas las partículas y la pose **anclada al arco balístico** (el controlador PD persigue la velocidad vertical del arco, así el cuerpo vuela de verdad y aterriza con impacto). **Trece figuras**: saltito, brinco, zancada, bollo, plancha, patada voladora, rodillazo volador, estrella, manoteando el aire, dejándose caer, valla, rebote en la pared, saltito de emoción. Al caer flexiona según la altura; el ágil rueda; el torpe se desploma |
+| trepando / bajando | el ancla sube del piso a la tapa (o baja) con la curva del estilo. **Seis trepadas**: clásica (manos, rodilla, arriba), pasada rápida con una mano y las piernas cruzando de costado, kong (dos manos, cadera arriba, piernas entre los brazos), dash (las piernas primero, las manos atrás), de panza por encima, frenética a cuatro patas. Una valla baja a la carrera se salta sin manos; el de parkour se tira de cabeza por encima y rueda. A veces sale mal: se lleva el borde por delante y vuelca encima. **Bajar**: ve el borde medio metro antes y elige: paso a paso, sentarse y dejarse caer, saltito, salto, salto y rodada, o tropezar |
+| movimiento | secuencias cortas que devuelven el control de pie: rodada hacia adelante, de hombro (parkour), hacia atrás, de costado por el piso, gateo rápido que se vuelve carrera, deslizada de béisbol, embestida con el hombro, agacharse de golpe, pasos tambaleantes |
+| cayendo | una de **veintidós caídas** elegida por causa y ángulo: sentarse de espaldas, de tabla, de boca, de rodillas y de boca, de costado, girando, desplomarse, volando, voltereta (el corredor), rebote contra la pared, de cara contra la pared, girar y resbalar por la pared, desplomarse contra la pared, volcar sobre un borde, de cara sin manos, rueda de costado, helicóptero, resbalón, tres pasos y cae, de rodillas resbalando, plancha fallida, tacle |
+| tirado | física pura, aturdido un tiempo que depende del tipo (el corredor 0.35 s, el bruto 1.3 s, el jugador 0.28 s) |
+| levantándose | una de **veinticinco levantadas** elegida por cómo quedó. Boca arriba: abdominal, rodar y empujar, de un salto, pesada, rodar y gatear, voltereta hacia atrás, mareado y ladeado, el bruto que ruge. Boca abajo: flexión, rodilla primero, rodar y sentarse, gatear, rápida, explosiva desde la posición de salida, gatear y salir corriendo, la que falla a mitad y vuelve a intentar. De costado: a boca abajo, a boca arriba, sobre el codo, barrer las piernas. Desde arrodillado: normal, de un salto, lanzándose a correr. Desde sentado: normal, girando sobre una rodilla. El peso de cada una depende del tipo de cuerpo y del rasgo parkour |
 | descansando | dormido en el piso o sentado contra la pared hasta que algo lo despierte; entonces se levanta como corresponda |
 | muriendo | una de **seis muertes**: se desploma, camina herido y cae, cae de rodillas y de boca, se arquea de espaldas, gira y cae, se dobla y se va de costado. Un tiro en la cabeza es instantáneo |
 
@@ -168,11 +183,15 @@ la física hace el resto: por eso una levantada choca con el escritorio de al la
    corredor da la voltereta y sigue); parado, se le dobla la rodilla o se desploma si fue fuerte.
 5. Mucho momento en poco tiempo (escopeta, ráfaga) lo tira, con una caída elegida por el ángulo.
 
-**Colisiones a la carrera.** Contra una pared de frente: rebota y cae; de refilón: raspa el
-hombro, gira y sigue tambaleando a lo largo de la pared. Contra otro cuerpo: por la espalda, el
-de adelante cae de boca y el de atrás se tropieza con él; de frente, a más velocidad los dos se
-van al piso; de costado, un hombrazo que hace girar al otro. Los pies que se traban en un
-cadáver o una caja tropiezan.
+**Colisiones a la carrera.** Contra una pared de frente, según quién: el ágil (el jugador, el
+de parkour) **la atrapa con las manos**, rebota y tambalea hacia atrás sin caer; el de parkour
+rápido planta un pie y **se impulsa hacia atrás y arriba** girando en el aire; el resto rebota y
+cae, se estrella de cara, gira y resbala por la pared hasta sentarse, o se le doblan las
+piernas contra ella. Contra el borde de un escritorio que no llegó a trepar: vuelca encima. De
+refilón: raspa el hombro, gira y sigue tambaleando a lo largo de la pared. Contra otro cuerpo:
+por la espalda, el de adelante cae de boca y el de atrás se tropieza con él; de frente, a más
+velocidad los dos se van al piso; de costado, un hombrazo que hace girar al otro; el ágil se lo
+lleva puesto con el hombro y sigue. Los pies que se traban en un cadáver o una caja tropiezan.
 
 ### 3. Navegación (`src/game/nav.js`)
 
@@ -196,14 +215,31 @@ Estados: dormido (deambula, o descansa sentado, arrodillado o tirado en el piso)
 vio, te oyó o le pegaste: se da vuelta, medio segundo de reacción, y arranca), persecución
 (flujo lejos, directo cerca, separación entre cuerpos y flanqueo para rodearte), ataque.
 
+**Rasgos.** Uno de cada cinco **pega saltitos**: brinca mientras corre con su figura propia
+(brinco, zancada, patada, manoteando el aire), salta de emoción dos o tres veces al verte y se
+mece sobre las rodillas cuando está quieto. Dos de cada diez hacen **parkour**: cruzan los
+escritorios en kong o dash, o se tiran de cabeza por encima y ruedan; bajan saltando y ruedan
+al caer; rebotan en las paredes con el pie; se lanzan en plancha desde tres metros; se levantan
+con voltereta o de un salto; y se les nota la agilidad en todo lo demás.
+
 | Ataque | Quién | Qué hace |
 |---|---|---|
-| manotazo derecho o izquierdo | todos | empujón |
+| manotazo derecho o izquierdo, revés, garra, doble garra | todos | empujón |
 | doble manotazo | todos | empujón fuerte |
-| agarrón | caminante, trotador | te frena un instante |
+| agarrón, agarrón lanzado, agarrar y sacudir, morder el cuello | caminante, trotador | te frena un instante |
 | mordida | todos | la cabeza va al cuello |
-| mazazo | bruto | te tumba |
+| cabezazo, rodillazo | todos | tambaleo grande |
+| patada | trotador, corredor | empujón con la pierna |
+| gancho | trotador, corredor | te levanta |
+| molinete | todos, poco | vuelta entera del brazo: te tumba |
+| ráfaga | corredor | tres manotazos seguidos |
+| pisotón | todos | sólo si estás en el piso |
+| mazazo, puños al piso, molinete del bruto | bruto | te tumba |
+| embestida | bruto, corredor | baja el hombro desde tres metros: te tumba |
 | tacle | corredor | se tira de cabeza: los dos al piso |
+| **plancha** | corredor, parkour | se lanza en el aire desde tres metros y cae encima: los dos al piso |
+| rodillazo volador | parkour | salta con la rodilla al frente: te tumba |
+| caer encima | cualquiera arriba de un mueble | se tira desde el escritorio sobre vos |
 
 Los cuerpos lejos del jugador se saltan las pasadas de colisión de huesos (`lod`). Desde la
 primera oleada hay **estampidas**: un grupo de corredores entra junto por una puerta cada 14 a
@@ -290,7 +326,7 @@ Las suites corren en Node sin navegador y miden comportamiento físico real: dis
 tiempos, velocidades.
 
 ```
-npm test                       # las diez suites
+npm test                       # las once suites
 node test/t_world.mjs          # motor: estabilidad, colisiones, expulsión suave, rendimiento
 node test/t_ragdoll.mjs        # ragdoll: de pie, marcha a 1.4 m/s, muerte, desmembrado, 40 cuerpos
 node test/t_nav.mjs            # campo de flujo, muebles trepables
@@ -301,7 +337,9 @@ node test/t_stampede.mjs       # choques a la carrera, tropezones, marchas, paso
 node test/t_hits.mjs           # reacción a los tiros por dirección, zona y momento
 node test/t_anim.mjs           # trepar, agacharse, aterrizar, inclinarse, brazos al caer
 node test/t_moves.mjs          # el catálogo: cada levantada, caída, muerte, sacudón, ataque, tic,
-                               # estilo y descanso, uno por uno (85 pruebas)
+                               # estilo y descanso, uno por uno (131 pruebas)
+node test/t_parkour.mjs        # saltos, trepadas por estilo, bajadas, rodadas, plancha, pared,
+                               # el jugador ágil, heridas, los cincuenta estilos, rasgos (53 pruebas)
 ```
 
 Ejemplos de lo que se comprueba: que las quince levantadas terminan de pie desde su pose exacta

@@ -9,7 +9,7 @@ import { HEAD, CHEST, HIP, HAR, HAL, BONES, B_SKULL } from '../phys/ragdoll.js';
 import { NavGrid } from './nav.js';
 import { LevelBuilder, buildOffice } from './level.js';
 import { PropSystem } from './props.js';
-import { ZombieManager } from './zombie.js';
+import { ZombieManager, ATTACKS } from './zombie.js';
 import { Player } from './player.js';
 import { WEAPONS, WEAPON_ORDER, fireHitscan } from './weapons.js';
 import { Materials } from '../render/materials.js';
@@ -451,9 +451,18 @@ export class Game {
     this._hk = {
       onAttack: (Z, dmg, ux, uz, kind = 'swipe') => {
         const P = this.player;
-        const died = P.damage(dmg, Z.x, Z.z, kind);
-        // el mazazo del bruto y el tacle del corredor tumban: hay que levantarse
-        if (!died && (kind === 'overhead' || kind === 'tackle')) { P.body.knockback(ux, uz, kind === 'overhead' ? 1.6 : 1.35, 0.4); this.R.addShake(0.4 * this.settings.shake); }
+        const A = ATTACKS[kind] || ATTACKS.swipe;
+        const eff = A.effect || 'shove';
+        const died = P.damage(dmg, Z.x, Z.z, eff === 'grab' ? 'grab' : kind);
+        // qué le hace además del daño: tumbar (mazazo, molinete, puños, embestida, rodillazo
+        // volador, caer encima), tacle (los dos al piso), levantarlo (gancho), tambaleo grande
+        if (!died) {
+          const B = P.body;
+          if (eff === 'knockdown') { B.knockback(ux, uz, 1.5 + (Z.type === 'brute' ? 0.2 : 0), 0.4); this.R.addShake(0.4 * this.settings.shake); }
+          else if (eff === 'tackle') { B.knockback(ux, uz, 1.35, 0.4); this.R.addShake(0.4 * this.settings.shake); }
+          else if (eff === 'launch') { B.knockback(ux, uz, 1.25, 1.2); this.R.addShake(0.5 * this.settings.shake); }
+          else if (eff === 'stagger') { B.stagger = Math.min(0.9, B.stagger + 0.35); B.stumble(ux, uz, 2.4, 0.45); }
+        }
         this.audio.bite(Z.x, Z.z);
         this.audio.hurt();
         this.R.addShake(0.45 * this.settings.shake);
@@ -557,6 +566,8 @@ export class Game {
         crouch: I.held('ControlLeft') || I.held('ControlRight') || I.held('KeyC'),
         aimX: this._aim.x, aimZ: this._aim.z,
       };
+      // C tocado mientras corre = rodada de esquive (mantenido sin correr = agacharse)
+      inp.roll = I.pressed('KeyC') && inp.run;
       inp.mx = clamp(inp.mx, -1, 1); inp.mz = clamp(inp.mz, -1, 1);
       P.update(dt, inp, this._fwd, this._rgt);
 
@@ -568,11 +579,20 @@ export class Game {
         for (let k = 0; k < 4; k++) if (I.pressed('Digit' + (k + 1)) && A.switchTo(WEAPON_ORDER[k])) { this._setWeaponVisible(A.current); this.audio.switchWeapon(); }
         if (I.pressed('KeyR') && canAct && A.startReload()) this.audio.reload(A.current);
         if (I.pressed('KeyF')) { P.flashlight = !P.flashlight; this.beam.visible = P.flashlight; }
-        // espacio: trepar lo que tenga adelante (escritorio, mesa); si no hay nada, empujón
-        if (I.pressed('Space') && canAct) {
-          const d = P.aimDir(this._dir);
-          const mv = Math.hypot(P.body.wantX, P.body.wantZ) > 0.1 ? { x: P.body.wantX, z: P.body.wantZ } : d;
-          if (!P.body.tryVault(mv.x, mv.z)) this._shove();
+        // espacio: trepar lo que tenga adelante (escritorio, mesa); si no hay nada,
+        // corriendo salta (vallas, cadáveres, huecos), si no, empujón. En el piso: levantarse ya
+        if (I.pressed('Space')) {
+          const B = P.body;
+          if (canAct) {
+            const d = P.aimDir(this._dir);
+            const mv = Math.hypot(B.wantX, B.wantZ) > 0.1 ? { x: B.wantX, z: B.wantZ } : d;
+            if (!B.tryVault(mv.x, mv.z)) {
+              if (inp.run && P.moving > 0.3 && B.speed > 2.4) {
+                const sp = Math.max(B.speed, 3.2);
+                B.jump(B.speed > 4.6 ? 'bound' : 'tuck', 3.6, mv.x * sp, mv.z * sp, { land: 'run', prep: 0.07 });
+              } else this._shove();
+            }
+          } else if ((B.state === 'down' && B.downT > 0.12) || B.state === 'rest') B._startGetUp();
         }
         const shot = A.tryFire(I.fire && canAct);
         if (shot === 'empty') { this.audio.empty(); if (A.weapon.canReload) { A.startReload(); this.audio.reload(A.current); } }
@@ -591,7 +611,13 @@ export class Game {
     this.zm.update(dt, P, this._hooks());
 
     // ── física ──
-    for (let i = 0; i < w.bodies.length; i++) { const b = w.bodies[i]; if (b.update) b.update(dt); }
+    for (let i = 0; i < w.bodies.length; i++) {
+      const b = w.bodies[i];
+      if (!b.update) continue;
+      b.update(dt);
+      // aterrizó recién (salto, brinco, bajada): golpe sordo según la altura
+      if (b.landT === 0 && b.lastLandDrop !== undefined && b.p) this.audio.thud(b.x, b.z, 0.35 + Math.min(1.2, b.lastLandDrop));
+    }
     this.props.update(dt);
     w.step(dt);
     this.perf.phys = performance.now() - t0;

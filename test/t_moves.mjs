@@ -169,7 +169,8 @@ console.log('\n── dormidos ──');
     B.wake();
     let upAt = -1;
     run(w, 5.5, (t) => { if (upAt < 0 && B.state === 'up') upAt = t; });
-    ok(`${pose.padEnd(7)} descansa quieto y al despertar se levanta`, still && headRest < 1.3 && B.state === 'up' && B.upright && B.py(HEAD) > 1.4 && nanFree(w), `cabeza dormido ${headRest.toFixed(2)}, ${B.lastGetUp} en ${upAt >= 0 ? upAt.toFixed(1) : '-'} s`);
+    // (de pie = tronco vertical y cabeza por encima de 1,3: un encorvado con su tic de encorvarse llega a 1,37)
+    ok(`${pose.padEnd(7)} descansa quieto y al despertar se levanta`, still && headRest < 1.3 && B.state === 'up' && B.upright && B.py(HEAD) > 1.3 && nanFree(w), `cabeza dormido ${headRest.toFixed(2)}, ${B.lastGetUp} en ${upAt >= 0 ? upAt.toFixed(1) : '-'} s, cabeza ${B.py(HEAD).toFixed(2)}`);
   }
 }
 

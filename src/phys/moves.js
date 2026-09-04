@@ -311,6 +311,421 @@ P.kneelFeed = (T) => {
   floorClamp(T);
 };
 
+// ── mezcla de dos poses (para transiciones continuas) ────────────────────────
+const _pa = new Float32Array(NP * 3), _pb = new Float32Array(NP * 3);
+/** T = a·(1−u) + b·u, con `a` y `b` funciones de pose (ya con sus parámetros). */
+export function blend(T, a, b, u) {
+  u = clamp01(u);
+  a(_pa); b(_pb);
+  for (let i = 0; i < NP * 3; i++) T[i] = _pa[i] + (_pb[i] - _pa[i]) * u;
+}
+/** Suavizado 0..1 → 0..1 con derivada nula en los extremos. */
+const ss = (u) => { u = clamp01(u); return u * u * (3 - 2 * u); };
+/** Tramo: u ∈ [a,b] → 0..1 suavizado. */
+const seg = (u, a, b) => ss((u - a) / (b - a));
+
+// ═══ POSES EN EL AIRE (saltos, brincos, lanzarse) ════════════════════════════
+//  La altura del salto la pone el arco balístico del ragdoll (la pose se ancla
+//  a esa altura): acá la cadera va a 0.96 como parado y las piernas hacen la
+//  figura. `s` = lado que va adelante.
+
+/** Agachado para saltar: brazos atrás, tronco adelante (k = cuánto). */
+P.leapPrep = (T, k = 1) => {
+  if (typeof k !== 'number') k = 1;
+  torso(T, 0, 0.96 - 0.34 * k, -0.02 * k, 0.45 * k);
+  leg(T, 0, -0.15, 0.062, 0.02, -0.15, 0, 1); leg(T, 1, 0.15, 0.062, 0.02, 0.15, 0, 1);
+  arm(T, 0, -0.30, 0.66, -0.32 * k, -0.8, 0.2, -0.6); arm(T, 1, 0.30, 0.66, -0.32 * k, 0.8, 0.2, -0.6);
+};
+/** Saltito con los dos pies: rodillas apenas recogidas, brazos un poco afuera. */
+P.airHop = (T, k = 1) => {
+  if (typeof k !== 'number') k = 1;
+  torso(T, 0, 0.96, 0, 0.12);
+  leg(T, 0, -0.14, 0.30 + 0.05 * k, 0.12, -0.2, 0.3, 1); leg(T, 1, 0.14, 0.30 + 0.05 * k, 0.12, 0.2, 0.3, 1);
+  arm(T, 0, -0.40, 0.95, 0.10, -0.9, -0.4, -0.3); arm(T, 1, 0.40, 0.95, 0.10, 0.9, -0.4, -0.3);
+};
+/** Bollo: rodillas al pecho, brazos adelante y abajo. */
+P.airTuck = (T) => {
+  torso(T, 0, 0.96, 0, 0.32);
+  leg(T, 0, -0.14, 0.58, 0.18, 0, 0.6, 1); leg(T, 1, 0.14, 0.58, 0.18, 0, 0.6, 1);
+  arm(T, 0, -0.28, 0.98, 0.38, -0.8, -0.3, -0.4); arm(T, 1, 0.28, 0.98, 0.38, 0.8, -0.3, -0.4);
+};
+/** Zancada larga en el aire: una pierna estirada adelante, la otra atrás; brazos en oposición. */
+P.airSplit = (T, s = 1) => {
+  if (typeof s !== 'number') s = 1;
+  const sx = s ? 1 : -1;
+  torso(T, 0, 0.96, 0, 0.22);
+  leg(T, s, sx * 0.13, 0.55, 0.60, 0, 0.7, 1);          // adelante
+  leg(T, s ? 0 : 1, -sx * 0.13, 0.70, -0.52, 0, 1, -0.4); // atrás, doblada
+  arm(T, s, sx * 0.30, 0.92, -0.35, sx * 0.7, 0.2, -0.7);          // brazo del lado de la pierna adelantada: atrás
+  arm(T, s ? 0 : 1, -sx * 0.28, 1.25, 0.42, -sx * 0.7, -0.3, -0.5); // el otro: adelante
+};
+/** Plancha: brazos estirados al frente, tronco echado adelante, piernas atrás. */
+P.airSuperman = (T) => {
+  torso(T, 0, 0.96, 0, 0.80);
+  leg(T, 0, -0.13, 0.55, -0.52, 0, 0.5, -1); leg(T, 1, 0.13, 0.55, -0.52, 0, 0.5, -1);
+  arm(T, 0, -0.20, 1.42, 0.88, -0.5, 0.8, 0); arm(T, 1, 0.20, 1.42, 0.88, 0.5, 0.8, 0);
+  add(T, HEAD, 0, 0.04, 0.02);
+};
+/** Patada voladora: una pierna estirada al frente y arriba, la otra recogida. */
+P.airKick = (T, s = 1) => {
+  if (typeof s !== 'number') s = 1;
+  const sx = s ? 1 : -1;
+  torso(T, 0, 0.96, 0, -0.22);
+  leg(T, s, sx * 0.12, 0.92, 0.68, 0, 1, 0.3);
+  leg(T, s ? 0 : 1, -sx * 0.14, 0.45, 0.10, -sx * 0.3, 0.3, 1);
+  arm(T, 0, -0.55, 1.20, -0.10, -0.6, -0.6, -0.5); arm(T, 1, 0.55, 1.20, -0.10, 0.6, -0.6, -0.5);
+};
+/** Rodillazo volador: una rodilla alta, brazos que agarran adelante. */
+P.airKnee = (T, s = 1) => {
+  if (typeof s !== 'number') s = 1;
+  const sx = s ? 1 : -1;
+  torso(T, 0, 0.96, 0, 0.30);
+  leg(T, s, sx * 0.13, 0.72, 0.36, 0, 1, 1);
+  leg(T, s ? 0 : 1, -sx * 0.13, 0.55, -0.35, 0, 0.6, -1);
+  arm(T, 0, -0.24, 1.28, 0.46, -0.8, -0.3, -0.3); arm(T, 1, 0.24, 1.28, 0.46, 0.8, -0.3, -0.3);
+};
+/** Estrella: brazos y piernas abiertos. */
+P.airStar = (T) => {
+  torso(T, 0, 0.96, 0, 0.05);
+  leg(T, 0, -0.45, 0.42, 0.05, -1, 0, 0.3); leg(T, 1, 0.45, 0.42, 0.05, 1, 0, 0.3);
+  arm(T, 0, -0.60, 1.65, 0.05, -0.5, 1, 0); arm(T, 1, 0.60, 1.65, 0.05, 0.5, 1, 0);
+};
+/** Manotea el aire: piernas pedaleando y brazos en molino (ph = fase). */
+P.airFlail = (T, ph = 0) => {
+  if (typeof ph !== 'number') ph = 0;
+  torso(T, 0, 0.96, 0, 0.18);
+  for (let side = 0; side < 2; side++) {
+    const sx = side ? 1 : -1, p = ph + (side ? Math.PI : 0);
+    leg(T, side, sx * 0.13, 0.42 + 0.22 * Math.sin(p), 0.32 * Math.cos(p), 0, 0.6, 1);
+    const a = p * 1.3 + 1;
+    arm(T, side, sx * 0.34, 1.30 + 0.32 * Math.sin(a), 0.32 * Math.cos(a), sx * 0.7, 0.3, -0.3);
+  }
+};
+/** Brinco a la carrera (skip): una pierna doblada adelante, la otra atrás; brazos bombeando. */
+P.airSkip = (T, s = 1) => {
+  if (typeof s !== 'number') s = 1;
+  const sx = s ? 1 : -1;
+  torso(T, 0, 0.96, 0, 0.16);
+  leg(T, s, sx * 0.13, 0.52, 0.38, 0, 0.5, 1);
+  leg(T, s ? 0 : 1, -sx * 0.13, 0.34, -0.26, 0, 0.8, -0.6);
+  arm(T, s, sx * 0.28, 0.95, -0.22, sx * 0.6, 0.2, -0.8);
+  arm(T, s ? 0 : 1, -sx * 0.26, 1.18, 0.34, -sx * 0.6, -0.4, -0.6);
+};
+/** Cayendo de una altura: brazos afuera, rodillas listas, mirando abajo. */
+P.airDrop = (T) => {
+  torso(T, 0, 0.96, 0, 0.28);
+  leg(T, 0, -0.16, 0.30, 0.14, -0.2, 0.4, 1); leg(T, 1, 0.16, 0.30, 0.14, 0.2, 0.4, 1);
+  arm(T, 0, -0.52, 1.28, 0.12, -0.6, -0.4, -0.5); arm(T, 1, 0.52, 1.28, 0.12, 0.6, -0.4, -0.5);
+  add(T, HEAD, 0, -0.04, 0.06);
+};
+/** Valla: pierna guía doblada y alta, pierna de atrás recogida de costado. */
+P.hurdle = (T, s = 1) => {
+  if (typeof s !== 'number') s = 1;
+  const sx = s ? 1 : -1;
+  torso(T, 0, 0.96, 0, 0.40);
+  leg(T, s, sx * 0.15, 0.62, 0.48, 0, 1, 0.8);
+  leg(T, s ? 0 : 1, -sx * 0.40, 0.70, -0.15, -sx * 1, 0.5, 0);
+  arm(T, s, sx * 0.30, 0.80, -0.30, sx * 0.6, 0.3, -0.7);
+  arm(T, s ? 0 : 1, -sx * 0.25, 1.30, 0.50, -sx * 0.5, -0.3, -0.5);
+};
+/** Aterrizar: cuclillas profundas, brazos adelante y abajo para equilibrar (k = profundidad). */
+P.land = (T, k = 1) => {
+  if (typeof k !== 'number') k = 1;
+  torso(T, 0, 0.96 - 0.42 * k, -0.02 * k, 0.55 * k);
+  leg(T, 0, -0.17, 0.062, 0.05, -0.2, 0, 1); leg(T, 1, 0.17, 0.062, 0.05, 0.2, 0, 1);
+  arm(T, 0, -0.32, 0.90 - 0.22 * k, 0.40, -0.7, -0.5, -0.3); arm(T, 1, 0.32, 0.90 - 0.22 * k, 0.40, 0.7, -0.5, -0.3);
+};
+
+// ═══ RODAR ═══════════════════════════════════════════════════════════════════
+//  Bollo compacto girando sobre su centro. Estas poses se anclan al CENTRO de
+//  la pose (`anchor: 'center'` en la secuencia): el centro avanza y el cuerpo
+//  gira alrededor, como una pelota.
+const BALL_Y = 0.36, BALL_Z = 0.06;
+/** El bollo apoyado en el piso, sin girar (cabeza metida, manos en las rodillas). */
+P.ball = (T) => {
+  torso(T, 0, 0.36, 0.02, 1.25);
+  leg(T, 0, -0.14, 0.12, 0.28, -0.2, 0.8, 0.6); leg(T, 1, 0.14, 0.12, 0.28, 0.2, 0.8, 0.6);
+  arm(T, 0, -0.22, 0.28, 0.40, -1, 0.2, 0.2); arm(T, 1, 0.22, 0.28, 0.40, 1, 0.2, 0.2);
+  add(T, HEAD, 0, -0.10, 0.04); add(T, NECK, 0, -0.05, 0.02);
+};
+/** Rodada hacia adelante: el bollo girado `ang` (el frente baja primero). */
+P.roll = (T, ang = 0) => { if (typeof ang !== 'number') ang = 0; P.ball(T); rotX(T, ang, BALL_Y, BALL_Z); floorClamp(T, 0.0); };
+/** Rodada hacia atrás: la espalda baja primero. */
+P.rollBack = (T, ang = 0) => { if (typeof ang !== 'number') ang = 0; P.ball(T); rotX(T, -ang, BALL_Y, BALL_Z); floorClamp(T, 0.0); };
+/** Rodada de hombro (parkour): el bollo inclinado, rueda por la diagonal del hombro. */
+P.rollShoulder = (T, ang = 0, s = 1) => {
+  if (typeof ang !== 'number') ang = 0; if (typeof s !== 'number') s = 1;
+  P.ball(T);
+  rotY(T, (s ? -1 : 1) * 0.55, 0, BALL_Z);
+  rotX(T, ang, BALL_Y, BALL_Z);
+  floorClamp(T, 0.0);
+};
+
+// ═══ TREPAR / BAJAR ══════════════════════════════════════════════════════════
+//  El ancla sube del piso a la tapa mientras dura el movimiento (o baja, al
+//  descender). `rel` = altura de la tapa RESPECTO del ancla en este instante:
+//  las manos que se apoyan van a `rel` (+ un poco).
+const H = (rel, o = 0.05) => Math.max(0.10, rel + o);
+/** Trepada clásica: manos al borde, una rodilla arriba, se estira. */
+P.clamber = (T, u = 0, rel = 0.7, s = 1) => {
+  if (typeof u !== 'number') u = 0; if (typeof rel !== 'number') rel = 0.7; if (typeof s !== 'number') s = 1;
+  const sx = s ? 1 : -1;
+  if (u < 0.35) {
+    // agacharse y poner las manos
+    const k = seg(u, 0, 0.35);
+    torso(T, 0, 0.96 - 0.28 * k, -0.02 * k, 0.55 * k);
+    leg(T, 0, -0.15, 0.062, 0.05, -0.2, 0, 1); leg(T, 1, 0.15, 0.062, 0.05, 0.2, 0, 1);
+    arm(T, 0, -0.22, lerp(0.90, H(rel), k), lerp(0.30, 0.48, k), -0.8, -0.3, -0.4); arm(T, 1, 0.22, lerp(0.90, H(rel), k), lerp(0.30, 0.48, k), 0.8, -0.3, -0.4);
+  } else if (u < 0.75) {
+    // rodilla guía a la tapa, la otra pierna empuja abajo
+    const k = seg(u, 0.35, 0.75);
+    torso(T, 0, 0.70 + 0.10 * k, -0.02, 0.85 - 0.25 * k);
+    leg(T, s, sx * 0.16, H(rel, 0.08) * (1 - k) + 0.062 * k, 0.40 + 0.10 * k, sx * 0.3, 1, 0.8);
+    leg(T, s ? 0 : 1, -sx * 0.14, 0.062 * (1 - k) + H(rel, 0.10) * k, -0.10 + 0.45 * k, -sx * 0.3, 0.8, 0.5);
+    arm(T, 0, -0.24, H(rel), 0.42, -0.8, -0.3, -0.3); arm(T, 1, 0.24, H(rel), 0.42, 0.8, -0.3, -0.3);
+  } else {
+    const k = seg(u, 0.75, 1);
+    torso(T, 0, 0.80 + 0.16 * k, 0, 0.60 - 0.55 * k);
+    leg(T, 0, -0.15, 0.062, 0.12 * (1 - k), -0.2, 0, 1); leg(T, 1, 0.15, 0.062, 0.05, 0.2, 0, 1);
+    arm(T, 0, -0.26, lerp(0.40, 0.86, k), lerp(0.40, 0.10, k), -0.8, -0.4, -0.3); arm(T, 1, 0.26, lerp(0.40, 0.86, k), lerp(0.40, 0.10, k), 0.8, -0.4, -0.3);
+  }
+  floorClamp(T, 0.0);
+};
+/** Pasada rápida: una mano apoyada, las piernas cruzan de costado por encima, el cuerpo casi horizontal. */
+P.speedVault = (T, u = 0, rel = 0.7, s = 1) => {
+  if (typeof u !== 'number') u = 0; if (typeof rel !== 'number') rel = 0.7; if (typeof s !== 'number') s = 1;
+  const sx = s ? 1 : -1;
+  const k = seg(u, 0.15, 0.55), k2 = seg(u, 0.55, 1);
+  // el tronco se inclina hacia la mano y gira un poco
+  torso(T, sx * 0.10 * k * (1 - k2), 0.96 - 0.20 * k * (1 - k2), 0.02, 0.55 * k * (1 - k2), sx * 0.45 * k * (1 - k2), -sx * 0.35 * k * (1 - k2));
+  // piernas: cruzan del lado opuesto a la mano, estiradas y altas
+  leg(T, s, sx * 0.05 - sx * 0.35 * k * (1 - k2), lerp(0.062, 0.80, k) * (1 - k2) + 0.062 * k2, lerp(0.10, 0.30, k), -sx * 0.6, 0.8, 0.4);
+  leg(T, s ? 0 : 1, -sx * 0.12 - sx * 0.40 * k * (1 - k2), lerp(0.062, 0.70, k) * (1 - k2) + 0.062 * k2, lerp(-0.05, 0.15, k), -sx * 0.8, 0.6, 0.3);
+  // mano de apoyo del lado `s`; la otra afuera para equilibrar
+  arm(T, s, sx * 0.30, lerp(0.95, H(rel, 0.04), k) * (1 - k2) + 0.86 * k2, lerp(0.25, 0.30, k), sx * 0.9, -0.2, -0.3);
+  arm(T, s ? 0 : 1, -sx * 0.45, lerp(1.0, 1.35, k) * (1 - k2) + 0.86 * k2, 0.15, -sx * 0.6, -0.6, -0.4);
+  floorClamp(T, 0.0);
+};
+/** Kong: dos manos adelante, cadera arriba, las piernas pasan recogidas entre los brazos. */
+P.kong = (T, u = 0, rel = 0.7) => {
+  if (typeof u !== 'number') u = 0; if (typeof rel !== 'number') rel = 0.7;
+  const dive = seg(u, 0, 0.35), thru = seg(u, 0.35, 0.75), land = seg(u, 0.75, 1);
+  torso(T, 0, 0.96 - 0.12 * dive + 0.10 * thru - 0.05 * land, 0, 1.10 * dive - 0.30 * thru - 0.55 * land);
+  const hy = lerp(1.0, H(rel, 0.04), dive) * (1 - land) + 0.90 * land;
+  arm(T, 0, -0.22, hy, lerp(0.45, 0.50, dive) * (1 - land) + 0.25 * land, -0.5, 0.5, -0.6);
+  arm(T, 1, 0.22, hy, lerp(0.45, 0.50, dive) * (1 - land) + 0.25 * land, 0.5, 0.5, -0.6);
+  // piernas: atrás y estiradas → recogidas al pecho → adelante para apoyar
+  const fy = 0.062 * (1 - dive) + 0.45 * dive * (1 - thru) + 0.62 * thru * (1 - land) + 0.062 * land;
+  const fz = -0.15 * dive * (1 - thru) + 0.12 * thru * (1 - land) + 0.30 * land;
+  leg(T, 0, -0.13, fy, fz, 0, 0.9, 0.6); leg(T, 1, 0.13, fy, fz, 0, 0.9, 0.6);
+  floorClamp(T, 0.0);
+};
+/** Dash: primero saltan las piernas adelante (como sentándose en el aire), las manos tocan después atrás. */
+P.dashVault = (T, u = 0, rel = 0.7) => {
+  if (typeof u !== 'number') u = 0; if (typeof rel !== 'number') rel = 0.7;
+  const up = seg(u, 0, 0.4), dn = seg(u, 0.6, 1);
+  torso(T, 0, 0.96, 0, -0.30 * up * (1 - dn) + 0.30 * dn);
+  leg(T, 0, -0.14, lerp(0.062, 0.62, up) * (1 - dn) + 0.062 * dn, lerp(0.05, 0.62, up) * (1 - dn) + 0.15 * dn, 0, 0.8, 1);
+  leg(T, 1, 0.14, lerp(0.062, 0.62, up) * (1 - dn) + 0.062 * dn, lerp(0.05, 0.62, up) * (1 - dn) + 0.15 * dn, 0, 0.8, 1);
+  const touch = seg(u, 0.3, 0.6) * (1 - dn);
+  arm(T, 0, -0.30, lerp(1.05, H(rel, 0.04), touch) * (1 - dn) + 0.90 * dn, lerp(0.20, -0.15, touch) * (1 - dn) + 0.30 * dn, -0.9, 0.2, -0.4);
+  arm(T, 1, 0.30, lerp(1.05, H(rel, 0.04), touch) * (1 - dn) + 0.90 * dn, lerp(0.20, -0.15, touch) * (1 - dn) + 0.30 * dn, 0.9, 0.2, -0.4);
+  floorClamp(T, 0.0);
+};
+/** Boca abajo por encima: manos al borde, se tira de panza sobre la tapa y resbala, después baja las piernas. */
+P.rollOver = (T, u = 0, rel = 0.7) => {
+  if (typeof u !== 'number') u = 0; if (typeof rel !== 'number') rel = 0.7;
+  if (u < 0.35) {
+    const k = seg(u, 0, 0.35);
+    torso(T, 0, 0.96 - 0.35 * k, 0, 1.15 * k);
+    leg(T, 0, -0.14, 0.062, 0.05 - 0.10 * k, -0.2, 0.2, 1); leg(T, 1, 0.14, 0.062, 0.05 - 0.10 * k, 0.2, 0.2, 1);
+    arm(T, 0, -0.24, lerp(0.95, H(rel), k), lerp(0.30, 0.55, k), -0.5, 0.6, -0.5); arm(T, 1, 0.24, lerp(0.95, H(rel), k), lerp(0.30, 0.55, k), 0.5, 0.6, -0.5);
+  } else if (u < 0.7) {
+    // de panza sobre la tapa, brazos adelante
+    P.prone(T);
+    arm(T, 0, -0.26, 0.08, 0.80, -0.5, 0.8, 0); arm(T, 1, 0.26, 0.08, 0.80, 0.5, 0.8, 0);
+    add(T, HEAD, 0, 0.14, 0.04); add(T, NECK, 0, 0.07, 0.02);
+    const k = seg(u, 0.35, 0.7);
+    add(T, KNL, 0, 0.10 * k, 0); add(T, KNR, 0, 0.10 * k, 0);
+  } else {
+    blend(T, (X) => P.allFours(X, 0), (X) => P.crouch(X, 0.6), seg(u, 0.7, 1));
+  }
+  floorClamp(T, 0.0);
+};
+/** Trepada frenética: cuatro miembros, rodillas al borde, todo tiembla. */
+P.scrambleVault = (T, u = 0, rel = 0.7) => {
+  if (typeof u !== 'number') u = 0; if (typeof rel !== 'number') rel = 0.7;
+  const j = Math.sin(u * 34) * 0.03, j2 = Math.cos(u * 27) * 0.03;
+  if (u < 0.5) {
+    const k = seg(u, 0, 0.5);
+    torso(T, j, 0.96 - 0.32 * k, -0.02 * k, 0.95 * k, j2);
+    leg(T, 0, -0.15, lerp(0.062, H(rel, 0.08), k) + j, 0.30 * k, -0.3, 1, 0.6); leg(T, 1, 0.15, lerp(0.062, H(rel, 0.08), k * 0.7) - j, 0.18 * k, 0.3, 1, 0.6);
+    arm(T, 0, -0.24 + j2, lerp(0.95, H(rel), k), lerp(0.30, 0.50, k), -0.8, 0, -0.4); arm(T, 1, 0.24 - j2, lerp(0.95, H(rel), k * 1.2), lerp(0.30, 0.55, k), 0.8, 0, -0.4);
+  } else {
+    blend(T, (X) => P.allFours(X, Math.sin(u * 20)), (X) => P.crouch(X, 0.55), seg(u, 0.5, 1));
+    add(T, HEAD, j, j2, 0);
+  }
+  floorClamp(T, 0.0);
+};
+/** Bajar sentado: se sienta en el borde con las piernas colgando y se deja caer. */
+P.sitDrop = (T, u = 0, rel = -0.7) => {
+  if (typeof u !== 'number') u = 0; if (typeof rel !== 'number') rel = -0.7;
+  // rel < 0: la tapa queda por DEBAJO del ancla original… acá rel = tapa − ancla actual
+  if (u < 0.4) {
+    const k = seg(u, 0, 0.4);
+    torso(T, 0, lerp(0.96, 0.14, k), 0, lerp(0.1, 0.15, k));
+    leg(T, 0, -0.13, lerp(0.062, -0.55, k), lerp(0.05, 0.30, k), -0.1, 0.3, 1); leg(T, 1, 0.13, lerp(0.062, -0.55, k), lerp(0.05, 0.30, k), 0.1, 0.3, 1);
+    arm(T, 0, -0.34, lerp(0.86, 0.10, k), -0.05, -0.9, 0.3, -0.3); arm(T, 1, 0.34, lerp(0.86, 0.10, k), -0.05, 0.9, 0.3, -0.3);
+  } else if (u < 0.8) {
+    // resbala: la cadera sale del borde y baja con el ancla; los pies buscan el piso
+    const k = seg(u, 0.4, 0.8);
+    torso(T, 0, lerp(0.14, 0.96, k) + rel * (1 - k) * 0, 0, 0.35 * k);
+    leg(T, 0, -0.15, 0.062 + 0.10 * (1 - k), 0.12, -0.2, 0.3, 1); leg(T, 1, 0.15, 0.062 + 0.10 * (1 - k), 0.12, 0.2, 0.3, 1);
+    arm(T, 0, -0.32, lerp(0.10, 0.95, k), lerp(-0.10, 0.20, k), -0.8, 0.2, -0.5); arm(T, 1, 0.32, lerp(0.10, 0.95, k), lerp(-0.10, 0.20, k), 0.8, 0.2, -0.5);
+  } else {
+    P.land(T, 0.45 * (1 - seg(u, 0.8, 1)));
+  }
+};
+/** Bajar con cuidado: agachado, un pie busca el piso, después el otro. */
+P.stepDown = (T, u = 0, rel = -0.7, s = 1) => {
+  if (typeof u !== 'number') u = 0; if (typeof rel !== 'number') rel = -0.7; if (typeof s !== 'number') s = 1;
+  const sx = s ? 1 : -1;
+  if (u < 0.45) {
+    const k = seg(u, 0, 0.45);
+    torso(T, 0, 0.96 - 0.30 * k, -0.03 * k, 0.5 * k);
+    // el pie guía baja por adelante del borde
+    leg(T, s, sx * 0.14, lerp(0.062, -0.40, k), lerp(0.05, 0.28, k), sx * 0.2, 0.6, 1);
+    leg(T, s ? 0 : 1, -sx * 0.15, 0.062, -0.05, -sx * 0.2, 0, 1);
+    arm(T, 0, -0.34, 0.75, 0.15, -0.9, -0.3, -0.4); arm(T, 1, 0.34, 0.75, 0.15, 0.9, -0.3, -0.4);
+  } else {
+    const k = seg(u, 0.45, 1);
+    torso(T, 0, 0.66 + 0.30 * k, -0.03 * (1 - k), 0.5 - 0.4 * k);
+    leg(T, s, sx * 0.14, 0.062, 0.25 - 0.15 * k, sx * 0.2, 0.2, 1);
+    leg(T, s ? 0 : 1, -sx * 0.15, 0.062 + 0.30 * (1 - k), -0.05 + 0.10 * k, -sx * 0.2, 0.5, 1);
+    arm(T, 0, -0.34, lerp(0.75, 0.86, k), 0.10, -0.9, -0.3, -0.4); arm(T, 1, 0.34, lerp(0.75, 0.86, k), 0.10, 0.9, -0.3, -0.4);
+  }
+};
+
+// ═══ CONTRA LA PARED / EL BORDE ══════════════════════════════════════════════
+/** Atrapa la pared con las manos: brazos al frente, pecho adelante, un pie adelantado. */
+P.wallCatch = (T, k = 1) => {
+  if (typeof k !== 'number') k = 1;
+  torso(T, 0, 0.93, 0.02, 0.14 * k);
+  leg(T, 0, -0.14, 0.062, 0.22, -0.2, 0, 1); leg(T, 1, 0.14, 0.062, -0.12, 0.2, 0, 1);
+  arm(T, 0, -0.22, 1.28, 0.30 + 0.25 * k, -0.5, -0.4, -0.5); arm(T, 1, 0.22, 1.28, 0.30 + 0.25 * k, 0.5, -0.4, -0.5);
+  add(T, HEAD, 0, -0.02 * k, -0.05 * k);
+};
+/** La cara contra la pared: cabeza echada atrás por el golpe, manos arriba a los costados. */
+P.wallFace = (T) => {
+  torso(T, 0, 0.94, 0.02, -0.08);
+  leg(T, 0, -0.15, 0.062, 0.04, -0.2, 0, 1); leg(T, 1, 0.15, 0.062, 0.04, 0.2, 0, 1);
+  arm(T, 0, -0.32, 1.55, 0.22, -0.9, 0.3, -0.2); arm(T, 1, 0.32, 1.55, 0.22, 0.9, 0.3, -0.2);
+  add(T, HEAD, 0, -0.02, -0.10); add(T, NECK, 0, 0, -0.04);
+};
+/** Resbala por la pared hasta sentarse: espalda derecha, pies adelante. */
+P.wallSlideSit = (T, k = 1) => {
+  if (typeof k !== 'number') k = 1;
+  torso(T, 0, 0.96 - 0.55 * k, -0.02 * k, -0.12);
+  leg(T, 0, -0.16, 0.062, 0.12 + 0.35 * k, -0.15, 0.4, 1); leg(T, 1, 0.16, 0.062, 0.12 + 0.35 * k, 0.15, 0.4, 1);
+  arm(T, 0, -0.30, 0.90 - 0.55 * k, 0.05, -0.9, -0.2, -0.3); arm(T, 1, 0.30, 0.90 - 0.55 * k, 0.05, 0.9, -0.2, -0.3);
+  floorClamp(T);
+};
+/** Se desploma contra la pared: de rodillas, el pecho apoyado, las manos altas en la pared. */
+P.crumpleKneel = (T) => {
+  P.kneelUp(T);
+  torso(T, 0, 0.50, 0, 0.30);
+  arm(T, 0, -0.28, 1.05, 0.30, -0.9, 0.2, -0.2); arm(T, 1, 0.28, 1.05, 0.30, 0.9, 0.2, -0.2);
+  add(T, HEAD, 0, -0.06, 0.06);
+  floorClamp(T);
+};
+/** Vuelco sobre un borde: la cadera queda en el borde, el tronco cae del otro lado, las piernas suben. */
+P.overEdge = (T, u = 0.5) => {
+  if (typeof u !== 'number') u = 0.5;
+  torso(T, 0, 0.80 - 0.20 * u, 0, 0.9 + 0.7 * u);
+  leg(T, 0, -0.13, 0.55 + 0.30 * u, -0.45 - 0.15 * u, 0, 1, -0.4); leg(T, 1, 0.13, 0.50 + 0.35 * u, -0.45 - 0.15 * u, 0, 1, -0.4);
+  arm(T, 0, -0.25, 0.30 - 0.25 * u, 0.70, -0.5, 0.6, 0); arm(T, 1, 0.25, 0.30 - 0.25 * u, 0.70, 0.5, 0.6, 0);
+};
+/** Boca abajo con los brazos estirados al frente (resbalando de panza). */
+P.bellySlide = (T) => {
+  P.prone(T);
+  arm(T, 0, -0.25, 0.08, 0.85, -0.5, 0.8, 0); arm(T, 1, 0.25, 0.08, 0.85, 0.5, 0.8, 0);
+  add(T, HEAD, 0, 0.10, 0.03); add(T, NECK, 0, 0.05, 0.01);
+  floorClamp(T);
+};
+
+// ═══ EN EL PISO Y LEVANTARSE, VARIANTES ÁGILES ════════════════════════════════
+/** Deslizada (baseball): una pierna estirada adelante, la otra doblada, una mano atrás en el piso. */
+P.slide = (T, s = 1) => {
+  if (typeof s !== 'number') s = 1;
+  const sx = s ? 1 : -1;
+  torso(T, 0, 0.30, -0.02, -0.35);
+  leg(T, s ? 0 : 1, -sx * 0.14, 0.08, 0.72, 0, 1, 0.3);
+  leg(T, s, sx * 0.20, 0.10, 0.12, sx * 0.9, 0.3, 0);
+  arm(T, s, sx * 0.36, 0.07, -0.28, sx * 0.9, 0.3, -0.3);
+  arm(T, s ? 0 : 1, -sx * 0.30, 0.82, 0.38, -sx * 0.6, 0.6, 0.2);
+  floorClamp(T);
+};
+/** Posición de salida (sprinter): manos en el piso, piernas coiladas bajo la cadera, listo para explotar. */
+P.spring = (T) => {
+  torso(T, 0, 0.55, 0, 1.10);
+  leg(T, 0, -0.16, 0.062, 0.02, -0.2, 0.4, 1); leg(T, 1, 0.16, 0.062, -0.12, 0.2, 0.4, 1);
+  arm(T, 0, -0.26, 0.07, 0.55, -0.5, 0.6, -0.5); arm(T, 1, 0.26, 0.07, 0.55, 0.5, 0.6, -0.5);
+  add(T, HEAD, 0, 0.06, 0.04);
+  floorClamp(T);
+};
+/** Gateo transformándose en carrera: entre cuatro patas y agachado, mirando al frente. */
+P.crawlRun = (T, u = 0.5, reach = 0) => {
+  if (typeof u !== 'number') u = 0.5; if (typeof reach !== 'number') reach = 0;
+  blend(T, (X) => P.allFours(X, reach), (X) => P.crouch(X, 0.65), u);
+  add(T, HEAD, 0, 0.06 * (1 - u), 0.04 * (1 - u));
+  floorClamp(T);
+};
+/** Rugido: brazos abiertos y arriba, cabeza atrás, pecho afuera (de rodillas). */
+P.roar = (T) => {
+  P.kneelUp(T);
+  torso(T, 0, 0.52, 0, -0.18);
+  arm(T, 0, -0.58, 1.22, -0.08, -0.5, 1, 0); arm(T, 1, 0.58, 1.22, -0.08, 0.5, 1, 0);
+  add(T, HEAD, 0, -0.02, -0.10);
+};
+/** Rugido de pie. */
+P.roarUp = (T) => {
+  torso(T, 0, 0.98, 0, -0.22);
+  leg(T, 0, -0.18, 0.062, 0.02, -0.2, 0, 1); leg(T, 1, 0.18, 0.062, 0.02, 0.2, 0, 1);
+  arm(T, 0, -0.60, 1.70, -0.10, -0.5, 1, 0); arm(T, 1, 0.60, 1.70, -0.10, 0.5, 1, 0);
+  add(T, HEAD, 0, -0.02, -0.12);
+};
+/** Agachado inestable, ladeado (se levanta mareado). */
+P.crouchTilt = (T, k = 0.5, s = 1) => {
+  if (typeof k !== 'number') k = 0.5; if (typeof s !== 'number') s = 1;
+  P.crouch(T, k);
+  rotZ(T, (s ? -1 : 1) * 0.18, 0, 0.5);
+  add(T, s ? HAR : HAL, (s ? 1 : -1) * 0.20, 0.20, 0.05);
+  floorClamp(T);
+};
+/** Agachado de perfil, con las manos en el piso a un lado (giro sentado→rodilla). */
+P.kneelTwist = (T, s = 1) => {
+  if (typeof s !== 'number') s = 1;
+  P.kneelOne(T, s);
+  rotY(T, (s ? -1 : 1) * 0.5, 0, 0);
+  floorClamp(T);
+};
+/** Cabeza gacha, hombros caídos, manos colgando (aturdido de pie). */
+P.dazedStand = (T) => {
+  P.stand(T);
+  add(T, HEAD, 0, -0.10, 0.12); add(T, NECK, 0, -0.04, 0.06);
+  add(T, SHL, 0, -0.03, 0.04); add(T, SHR, 0, -0.03, 0.04);
+  arm(T, 0, -0.27, 0.80, 0.08, -0.9, -0.4, -0.3); arm(T, 1, 0.27, 0.80, 0.08, 0.9, -0.4, -0.3);
+};
+/** Con el hombro bajo, embistiendo. */
+P.chargeLow = (T, s = 1) => {
+  if (typeof s !== 'number') s = 1;
+  const sx = s ? 1 : -1;
+  torso(T, 0, 0.86, 0, 0.55, sx * 0.12, sx * 0.35);
+  leg(T, 0, -0.15, 0.062, 0.20, -0.2, 0, 1); leg(T, 1, 0.15, 0.062, -0.20, 0.2, 0, 1);
+  arm(T, s, sx * 0.20, 0.95, 0.20, sx * 0.9, -0.4, -0.2);
+  arm(T, s ? 0 : 1, -sx * 0.35, 0.85, -0.30, -sx * 0.7, 0.2, -0.7);
+};
+
 // ═══ SECUENCIAS ══════════════════════════════════════════════════════════════
 //  key = { t, pose(T, B, ctx), mus, legs, arms, fwd, up, yawAdd, kick, brace }
 //   · mus: músculo global en esa clave (se interpola) · legs/arms: multiplicador
@@ -337,7 +752,7 @@ SEQ.gu_situp = {
   ],
 };
 SEQ.gu_roll_push = {
-  kind: 'getup', from: 'supine', dur: 2.7, w: { runner: 1, walker: 2, brute: 1, player: 1 },
+  kind: 'getup', from: 'supine', dur: 2.7, w: { runner: 1, walker: 2, brute: 1, player: 0.3 },
   keys: [
     K(0.00, P.supine, { mus: 0.30 }),
     K(0.45, (T) => P.supineRoll(T, HALF), { mus: 0.45 }),
@@ -351,7 +766,7 @@ SEQ.gu_roll_push = {
   ],
 };
 SEQ.gu_kip = {
-  kind: 'getup', from: 'supine', dur: 1.15, w: { runner: 4, walker: 0.2, brute: 0, player: 1 },
+  kind: 'getup', from: 'supine', dur: 1.15, w: { runner: 4, walker: 0.2, brute: 0, player: 3 },
   keys: [
     K(0.00, P.supine, { mus: 0.35 }),
     K(0.30, P.supineTuck, { mus: 0.70 }),
@@ -388,7 +803,7 @@ SEQ.gu_back_crawl = {
 };
 // ── levantadas desde BOCA ABAJO (marco: +Z = hacia la cabeza) ────────────────
 SEQ.gu_pushup = {
-  kind: 'getup', from: 'prone', dur: 2.0, w: { runner: 1, walker: 2, brute: 1.5, player: 2 },
+  kind: 'getup', from: 'prone', dur: 2.0, w: { runner: 1, walker: 2, brute: 1.5, player: 0.8 },
   keys: [
     K(0.00, P.prone, { mus: 0.30 }),
     K(0.35, P.pushupLow, { mus: 0.55 }),
@@ -409,7 +824,7 @@ SEQ.gu_knee_first = {
   ],
 };
 SEQ.gu_prone_roll_sit = {
-  kind: 'getup', from: 'prone', dur: 2.7, w: { runner: 0.5, walker: 1.5, brute: 1, player: 0.5 },
+  kind: 'getup', from: 'prone', dur: 2.7, w: { runner: 0.5, walker: 1.5, brute: 1, player: 0.15 },
   keys: [
     K(0.00, P.prone, { mus: 0.30 }),
     K(0.45, (T) => P.proneRoll(T, HALF), { mus: 0.45 }),
@@ -456,7 +871,7 @@ SEQ.gu_side_prone = {
   ],
 };
 SEQ.gu_side_supine = {
-  kind: 'getup', from: 'side', dur: 2.5, w: { runner: 0.7, walker: 1.5, brute: 1.5, player: 1 },
+  kind: 'getup', from: 'side', dur: 2.5, w: { runner: 0.7, walker: 1.5, brute: 1.5, player: 0.3 },
   keys: [
     K(0.00, (T, B, c) => P.side(T, c.s), { mus: 0.30 }),
     K(0.50, P.supineKnees, { mus: 0.50, yawAdd: 'toFeet' }),
@@ -684,7 +1099,387 @@ SEQ.rest_supine = { kind: 'rest', dur: 1e9, keys: [K(0, P.supine, { mus: 0.10 })
 SEQ.rest_prone = { kind: 'rest', dur: 1e9, keys: [K(0, P.prone, { mus: 0.10 }), K(1e9, P.prone, { mus: 0.10 })], from: 'prone' };
 SEQ.rest_side = { kind: 'rest', dur: 1e9, keys: [K(0, (T, B, c) => P.side(T, c.s), { mus: 0.10 }), K(1e9, (T, B, c) => P.side(T, c.s), { mus: 0.10 })], from: 'side' };
 
+// ── LEVANTADAS ÁGILES Y CON CARÁCTER ─────────────────────────────────────────
+//  `w.parkour`: peso para los que tienen el rasgo parkour (pisa al del tipo).
+SEQ.gu_roll_up = {
+  // boca arriba: voltereta hacia atrás sobre los hombros y queda en cuclillas mirando al revés
+  kind: 'getup', from: 'supine', dur: 1.5, anchor: 'center', w: { runner: 2, jogger: 0.8, walker: 0, brute: 0, player: 2.5, parkour: 4 },
+  keys: [
+    K(0.00, P.supine, { mus: 0.35 }),
+    K(0.25, P.supineTuck, { mus: 0.70 }),
+    K(0.45, (T) => P.rollBack(T, 1.2), { mus: 0.80, fwd: -1.2, kick: [[FTL, 0, 3.0, -2.0], [FTR, 0, 3.0, -2.0], [KNL, 0, 2.2, -1.5], [KNR, 0, 2.2, -1.5], [HIP, 0, 1.5, -1.0]] }),
+    K(0.75, (T) => P.rollBack(T, 2.6), { mus: 0.85, fwd: -1.0 }),
+    K(1.00, P.squat, { mus: 0.95, yawAdd: Math.PI }),
+    K(1.25, (T) => P.crouch(T, 0.4), { mus: 1 }),
+    K(1.50, P.stand, { mus: 1 }),
+  ],
+};
+SEQ.gu_spring = {
+  // boca abajo: posición de salida y explota a los pies
+  kind: 'getup', from: 'prone', dur: 0.95, w: { runner: 4, jogger: 1.5, walker: 0.2, brute: 0, player: 3, parkour: 4 },
+  keys: [
+    K(0.00, P.prone, { mus: 0.40 }),
+    K(0.25, P.spring, { mus: 0.90 }),
+    K(0.45, (T) => P.crouch(T, 0.7), { mus: 1, kick: [[HIP, 0, 2.6, 0.8], [CHEST, 0, 2.4, 0.6], [HEAD, 0, 2.2, 0.5], [SHL, 0, 2.2, 0.5], [SHR, 0, 2.2, 0.5]] }),
+    K(0.70, (T) => P.crouch(T, 0.3), { mus: 1 }),
+    K(0.95, P.stand, { mus: 1 }),
+  ],
+};
+SEQ.gu_side_kick = {
+  // de costado: se apoya en el codo y barre las piernas por debajo hasta arrodillarse, rápido
+  kind: 'getup', from: 'side', dur: 1.3, w: { runner: 3, jogger: 1.5, walker: 0.3, brute: 0, player: 3, parkour: 3 },
+  keys: [
+    K(0.00, (T, B, c) => P.side(T, c.s), { mus: 0.35 }),
+    K(0.30, (T, B, c) => P.sideProp(T, c.s), { mus: 0.70 }),
+    K(0.60, (T, B, c) => P.kneelOne(T, c.s ? 0 : 1), { mus: 0.90, yawAdd: 'toHead', kick: [[HIP, 0, 2.0, 0], [KNL, 0, 1.5, 0], [KNR, 0, 1.5, 0]] }),
+    K(0.95, (T) => P.crouch(T, 0.4), { mus: 1 }),
+    K(1.30, P.stand, { mus: 1 }),
+  ],
+};
+SEQ.gu_knee_hop = {
+  // arrodillado: un salto a los pies
+  kind: 'getup', from: 'kneel', dur: 0.8, w: { runner: 3, jogger: 1.5, walker: 0.5, brute: 0, player: 3, parkour: 3 },
+  keys: [
+    K(0.00, P.kneelUp, { mus: 0.70 }),
+    K(0.25, (T) => P.kneelOne(T, 1), { mus: 0.95 }),
+    K(0.45, (T) => P.crouch(T, 0.6), { mus: 1, kick: [[HIP, 0, 2.4, 0.5], [CHEST, 0, 2.2, 0.4], [FTL, 0, 1.2, 0.5], [FTR, 0, 1.2, 0.5]] }),
+    K(0.80, P.stand, { mus: 1 }),
+  ],
+};
+SEQ.gu_crawl_run = {
+  // boca abajo: gatea y se va parando mientras ya corre
+  kind: 'getup', from: 'prone', dur: 2.0, w: { runner: 4, jogger: 2, walker: 0.5, brute: 0, player: 0.5, parkour: 2 },
+  keys: [
+    K(0.00, P.prone, { mus: 0.35 }),
+    K(0.30, P.pushupLow, { mus: 0.65 }),
+    K(0.55, (T) => P.allFours(T, 1), { mus: 0.80, fwd: 1.4 }),
+    K(0.85, (T) => P.allFours(T, -1), { mus: 0.85, fwd: 1.8 }),
+    K(1.15, (T) => P.crawlRun(T, 0.35, 1), { mus: 0.92, fwd: 2.2 }),
+    K(1.45, (T) => P.crawlRun(T, 0.75, -1), { mus: 1, fwd: 2.5 }),
+    K(1.75, (T) => P.crouch(T, 0.3), { mus: 1, fwd: 2.6 }),
+    K(2.00, P.stand, { mus: 1, fwd: 2.4 }),
+  ],
+};
+SEQ.gu_stumble_up = {
+  // boca arriba: se levanta mareado, ladeado, y tarda en enderezarse
+  kind: 'getup', from: 'supine', dur: 2.6, w: { runner: 0.3, jogger: 1, walker: 3, brute: 1, player: 0, parkour: 0 },
+  keys: [
+    K(0.00, P.supine, { mus: 0.30 }),
+    K(0.40, P.supineKnees, { mus: 0.50 }),
+    K(0.85, P.sitBack, { mus: 0.70 }),
+    K(1.25, P.squat, { mus: 0.80 }),
+    K(1.65, (T) => P.crouchTilt(T, 0.55, 1), { mus: 0.85 }),
+    K(2.05, (T) => P.crouchTilt(T, 0.30, 0), { mus: 0.90 }),
+    K(2.35, P.dazedStand, { mus: 0.95 }),
+    K(2.60, P.stand, { mus: 1 }),
+  ],
+};
+SEQ.gu_brute_roar = {
+  // boca arriba (bruto): se sienta, se arrodilla, ruge y se para
+  kind: 'getup', from: 'supine', dur: 3.2, w: { runner: 0, jogger: 0, walker: 0.2, brute: 5, player: 0, parkour: 0 },
+  keys: [
+    K(0.00, P.supine, { mus: 0.25 }),
+    K(0.60, P.supineKnees, { mus: 0.45 }),
+    K(1.20, P.sitBack, { mus: 0.65 }),
+    K(1.70, P.kneelUp, { mus: 0.80 }),
+    K(2.10, P.roar, { mus: 1 }),
+    K(2.60, P.roarUp, { mus: 1 }),
+    K(3.20, P.stand, { mus: 1 }),
+  ],
+};
+SEQ.gu_flop_retry = {
+  // boca abajo (caminante): empuja, se le aflojan los brazos, cae, y a la segunda sale
+  kind: 'getup', from: 'prone', dur: 3.4, w: { runner: 0, jogger: 0.3, walker: 2.5, brute: 0.5, player: 0, parkour: 0 },
+  keys: [
+    K(0.00, P.prone, { mus: 0.30 }),
+    K(0.40, P.pushupLow, { mus: 0.55 }),
+    K(0.85, P.pushupHigh, { mus: 0.65 }),
+    K(1.10, P.pushupLow, { mus: 0.15, arms: 0.2 }),
+    K(1.55, P.prone, { mus: 0.25 }),
+    K(2.00, P.pushupLow, { mus: 0.60 }),
+    K(2.40, P.allFours, { mus: 0.80 }),
+    K(2.85, P.squat, { mus: 0.92 }),
+    K(3.40, P.stand, { mus: 1 }),
+  ],
+};
+SEQ.gu_sit_twist = {
+  // sentado: gira sobre una rodilla y se para
+  kind: 'getup', from: 'sit', dur: 1.3, w: { runner: 1, jogger: 1, walker: 1, brute: 1, player: 1, parkour: 1 },
+  keys: [
+    K(0.00, P.sitRest, { mus: 0.60 }),
+    K(0.45, (T) => P.kneelTwist(T, 1), { mus: 0.85 }),
+    K(0.90, (T) => P.crouch(T, 0.45), { mus: 0.95, yawAdd: -0.5 }),
+    K(1.30, P.stand, { mus: 1 }),
+  ],
+};
+SEQ.gu_kneel_lunge = {
+  // arrodillado (corredor): se lanza hacia adelante y sale ya corriendo
+  kind: 'getup', from: 'kneel', dur: 1.0, w: { runner: 3, jogger: 1.5, walker: 0.3, brute: 0, player: 1, parkour: 2 },
+  keys: [
+    K(0.00, P.kneelUp, { mus: 0.70 }),
+    K(0.30, (T) => P.kneelOne(T, 1), { mus: 0.95, fwd: 0.6 }),
+    K(0.60, (T) => P.crouch(T, 0.5), { mus: 1, fwd: 1.6 }),
+    K(1.00, P.stand, { mus: 1, fwd: 2.2 }),
+  ],
+};
+
+// ── CAÍDAS NUEVAS: pared, borde, tropezones feos, impactos enormes ───────────
+SEQ.fall_wall_face = {
+  // de cara contra la pared: la cabeza rebota atrás, manos a la cara, se sienta
+  kind: 'fall', dur: 1.4, minT: 0.6, brace: false,
+  imp: [[HEAD, 2.4, 0.9, 0], [NECK, 1.8, 0.6, 0], [CHEST, 1.0, 0.3, 0], [HAL, 0.5, 1.8, 0], [HAR, 0.5, 1.8, 0]],
+  keys: [
+    K(0.00, P.wallFace, { mus: 0.25, arms: 4 }),
+    K(0.30, (T) => P.dominoBack(T, 0.45), { mus: 0.10, arms: 3 }),
+    K(0.70, P.sitBack, { mus: 0.12 }),
+    K(1.40, P.supine, { mus: 0.03 }),
+  ],
+};
+SEQ.fall_wall_slide = {
+  // rebota, gira y resbala por la pared con la espalda hasta quedar sentado
+  kind: 'fall', dur: 1.6, minT: 0.7, brace: false,
+  imp: [[HIP, 0.5, -1.0, 0], [CHEST, 0.9, 0.2, 0], [HEAD, 1.3, 0.4, 0], [SHL, 0.6, 0.2, 1.4], [SHR, 0.6, 0.2, -1.4]],
+  keys: [
+    K(0.00, (T) => P.wallCatch(T, 1), { mus: 0.30, arms: 3 }),
+    K(0.35, (T) => P.wallSlideSit(T, 0.35), { mus: 0.26, legs: 0.3, yawAdd: Math.PI }),
+    K(0.80, (T) => P.wallSlideSit(T, 1), { mus: 0.18, legs: 0.2 }),
+    K(1.20, P.sitSlump, { mus: 0.08 }),
+    K(1.60, (T, B, c) => P.side(T, c.s), { mus: 0.03 }),
+  ],
+};
+SEQ.fall_wall_crumple = {
+  // contra la pared las piernas ceden: de rodillas con el pecho apoyado, y de costado
+  kind: 'fall', dur: 1.7, minT: 0.8, brace: false,
+  imp: [[HIP, -0.3, -1.4, 0], [KNL, 0, -0.8, 0], [KNR, 0, -0.8, 0], [HEAD, 0.4, 0.3, 0]],
+  keys: [
+    K(0.00, P.wallCatch, { mus: 0.45, legs: 0.05, arms: 3 }),
+    K(0.35, P.crumpleKneel, { mus: 0.35, legs: 0.1, arms: 2 }),
+    K(0.85, P.kneelFeed, { mus: 0.18 }),
+    K(1.25, (T, B, c) => P.side(T, c.s), { mus: 0.06 }),
+    K(1.70, (T, B, c) => P.side(T, c.s), { mus: 0.03 }),
+  ],
+};
+SEQ.fall_over_edge = {
+  // vuelca sobre un borde a la altura de la cadera: el tronco pasa, las piernas suben, cae de panza encima
+  kind: 'fall', dur: 1.5, minT: 0.7, brace: false, quickUp: true,
+  imp: [[HEAD, 3.2, 1.2, 0], [CHEST, 3.0, 1.4, 0], [SHL, 2.8, 1.2, 0], [SHR, 2.8, 1.2, 0], [HIP, 1.6, 1.6, 0], [KNL, 0.6, 2.4, 0], [KNR, 0.6, 2.4, 0], [FTL, 0.2, 2.6, 0], [FTR, 0.2, 2.6, 0]],
+  keys: [
+    K(0.00, (T) => P.overEdge(T, 0.2), { mus: 0.30, legs: 1.5 }),
+    K(0.35, (T) => P.overEdge(T, 0.9), { mus: 0.22, legs: 1.2 }),
+    K(0.80, P.bellySlide, { mus: 0.12 }),
+    K(1.50, P.prone, { mus: 0.04 }),
+  ],
+};
+SEQ.fall_faceplant = {
+  // tropezón sin sacar las manos: de tabla hacia adelante y la cara al piso
+  kind: 'fall', dur: 1.2, minT: 0.5, brace: false,
+  imp: [[HEAD, 3.0, 0.2, 0], [CHEST, 2.8, 0.3, 0], [SHL, 2.6, 0.2, 0], [SHR, 2.6, 0.2, 0], [FTL, -0.8, 0.3, 0], [FTR, -0.8, 0.3, 0]],
+  keys: [
+    K(0.00, P.stand, { mus: 0.05, legs: 0.1, arms: 0.2 }),
+    K(0.30, (T) => P.dominoFront(T, 1.0), { mus: 0.05, arms: 0.1 }),
+    K(0.70, P.prone, { mus: 0.04, arms: 0.2 }),
+    K(1.20, P.prone, { mus: 0.02 }),
+  ],
+};
+SEQ.fall_cartwheel = {
+  // un impacto lateral enorme: gira como rueda de costado y cae
+  kind: 'fall', dur: 1.7, minT: 0.8, brace: false,
+  imp: [[HEAD, 2.0, 3.6, 0], [NECK, 1.8, 3.2, 0], [SHL, 1.6, 3.0, 0], [SHR, 1.6, 3.0, 0], [CHEST, 1.5, 2.6, 0], [HIP, 1.2, 1.4, 0], [FTL, 0.4, -0.6, 0], [FTR, 0.4, -0.6, 0]],
+  dyn: (T, B, c, t, u) => { P.armsOut(T); rotZ(T, (c.s ? -1 : 1) * Math.min(3.0, t * 4.5), 0, 0.90); floorClamp(T); },
+  keys: [K(0.00, P.armsOut, { mus: 0.05 }), K(0.9, P.armsOut, { mus: 0.03 }), K(1.7, P.armsOut, { mus: 0.02 })],
+};
+SEQ.fall_helicopter = {
+  // tiro en el hombro con mucha energía: gira sobre sí mismo mientras cae
+  kind: 'fall', dur: 1.6, minT: 0.7, brace: true,
+  imp: [[SHL, 1.5, 0.6, 3.4], [SHR, 1.5, 0.6, -3.4], [HAL, 1.0, 1.2, 4.0], [HAR, 1.0, 1.2, -4.0], [HEAD, 1.4, 0.5, 1.5], [CHEST, 1.2, 0.3, 0]],
+  dyn: (T, B, c, t, u) => { P.armsOut(T); rotY(T, (c.s ? 1 : -1) * t * 7.0, 0, 0); rotX(T, ss(t / 1.0) * 1.2, 0.06, 0.03); floorClamp(T); },
+  keys: [K(0.00, P.armsOut, { mus: 0.08, legs: 0.4 }), K(0.8, P.armsOut, { mus: 0.05 }), K(1.6, P.armsOut, { mus: 0.02 })],
+};
+SEQ.fall_slip = {
+  // resbalón: los pies se van adelante y cae de espaldas
+  kind: 'fall', dur: 1.3, minT: 0.5, brace: false,
+  imp: [[FTL, 3.5, 0.6, 0], [FTR, 3.5, 0.6, 0], [KNL, 2.6, 0.5, 0], [KNR, 2.6, 0.5, 0], [HIP, 0.8, -0.5, 0], [HEAD, -1.0, 0.2, 0], [HAL, -0.5, 1.5, 0], [HAR, -0.5, 1.5, 0]],
+  keys: [
+    K(0.00, P.armsOut, { mus: 0.10, legs: 0.2 }),
+    K(0.30, P.sitBack, { mus: 0.10 }),
+    K(0.70, P.supineKnees, { mus: 0.08 }),
+    K(1.30, P.supine, { mus: 0.03 }),
+  ],
+};
+SEQ.fall_stumble_long = {
+  // herido: tres pasos tambaleantes doblado hacia adelante y recién ahí cae
+  kind: 'fall', dur: 1.9, minT: 1.0, brace: true,
+  keys: [
+    K(0.00, P.stand, { mus: 0.65, fwd: 1.6 }),
+    K(0.40, P.doubleOver, { mus: 0.55, fwd: 1.4 }),
+    K(0.90, (T) => P.crouchTilt(T, 0.5, 1), { mus: 0.40, fwd: 1.0 }),
+    K(1.30, P.kneelUp, { mus: 0.20, fwd: 0.3 }),
+    K(1.90, P.prone, { mus: 0.04 }),
+  ],
+};
+SEQ.fall_knees_slide = {
+  // se desploma de rodillas resbalando hacia adelante y termina de cara
+  kind: 'fall', dur: 1.4, minT: 0.6, brace: true,
+  imp: [[HIP, 1.2, -1.8, 0], [KNL, 1.2, -1.2, 0], [KNR, 1.2, -1.2, 0], [CHEST, 1.6, -0.4, 0]],
+  keys: [
+    K(0.00, P.stand, { mus: 0.50, legs: 0.0, fwd: 1.2 }),
+    K(0.25, P.kneelUp, { mus: 0.40, legs: 0.1, fwd: 0.9 }),
+    K(0.65, P.kneelUp, { mus: 0.25, legs: 0.1, fwd: 0.3 }),
+    K(1.00, P.pushupLow, { mus: 0.10 }),
+    K(1.40, P.prone, { mus: 0.03 }),
+  ],
+};
+SEQ.fall_pounce_miss = {
+  // se lanzó y no agarró a nadie: aterriza de panza y resbala
+  kind: 'fall', dur: 1.1, minT: 0.5, brace: false, quickUp: true,
+  imp: [[HEAD, 2.0, -0.5, 0], [CHEST, 2.2, -0.6, 0], [HAL, 2.6, -0.4, 0], [HAR, 2.6, -0.4, 0], [HIP, 1.8, -0.2, 0]],
+  keys: [
+    K(0.00, P.airSuperman, { mus: 0.45, fwd: 2.0 }),
+    K(0.35, P.bellySlide, { mus: 0.20, fwd: 1.2 }),
+    K(0.75, P.pushupLow, { mus: 0.15 }),
+    K(1.10, P.prone, { mus: 0.05 }),
+  ],
+};
+
+// ── MOVIMIENTOS: toman el cuerpo un instante y devuelven el control de pie ───
+//  kind:'move'. `dyn(T, B, ctx, t, u)` da la pose continua (las claves sólo
+//  llevan músculo y avance). anchor:'center' ancla la pose a su centro (para
+//  rodar). vel: la velocidad objetivo del PD sigue a fwd/lat (la física
+//  acompaña el movimiento en vez de frenarlo). end:'down' termina tirado.
+SEQ.roll_fwd = {
+  kind: 'move', dur: 0.95, anchor: 'center', vel: true, brace: false,
+  dyn: (T, B, c, t, u) => {
+    if (u < 0.12) blend(T, (X) => P.crouch(X, 0.7), (X) => P.roll(X, 0), u / 0.12);
+    else if (u < 0.78) P.roll(T, seg(u, 0.12, 0.78) * Math.PI * 2);
+    else blend(T, (X) => P.roll(X, Math.PI * 2), (X) => P.crouch(X, 0.35), seg(u, 0.78, 1));
+  },
+  keys: [K(0, null, { mus: 0.9, fwd: 2.8 }), K(0.15, null, { mus: 0.85, fwd: 2.6 }), K(0.75, null, { mus: 0.9, fwd: 1.6 }), K(0.95, null, { mus: 1, fwd: 0.8 })],
+};
+SEQ.roll_shoulder = {
+  // rodada de hombro (parkour): entra por la diagonal, sale corriendo
+  kind: 'move', dur: 0.85, anchor: 'center', vel: true, brace: false,
+  dyn: (T, B, c, t, u) => {
+    if (u < 0.10) blend(T, (X) => P.crouch(X, 0.8), (X) => P.rollShoulder(X, 0, c.s), u / 0.10);
+    else if (u < 0.75) P.rollShoulder(T, seg(u, 0.10, 0.75) * Math.PI * 2, c.s);
+    else blend(T, (X) => P.rollShoulder(X, Math.PI * 2, c.s), (X) => P.crouch(X, 0.25), seg(u, 0.75, 1));
+  },
+  keys: [K(0, null, { mus: 0.9, fwd: 3.2 }), K(0.7, null, { mus: 0.9, fwd: 2.2 }), K(0.85, null, { mus: 1, fwd: 1.8 })],
+};
+SEQ.roll_back = {
+  // rodada hacia atrás: cae de espaldas y sale rodando a los pies
+  kind: 'move', dur: 1.0, anchor: 'center', vel: true, brace: false,
+  dyn: (T, B, c, t, u) => {
+    if (u < 0.15) blend(T, P.supineTuck, (X) => P.rollBack(X, 0.3), u / 0.15);
+    else if (u < 0.80) P.rollBack(T, 0.3 + seg(u, 0.15, 0.80) * (Math.PI * 2 - 0.3));
+    else blend(T, (X) => P.rollBack(X, Math.PI * 2), (X) => P.crouch(X, 0.4), seg(u, 0.80, 1));
+  },
+  keys: [K(0, null, { mus: 0.85, fwd: -2.2 }), K(0.8, null, { mus: 0.9, fwd: -1.2 }), K(1.0, null, { mus: 1, fwd: 0 })],
+};
+SEQ.roll_side = {
+  // rodar de costado por el piso (sacarse a alguien de encima): gira sobre el eje largo
+  kind: 'move', dur: 0.8, anchor: 'center', vel: true, brace: false, end: 'down',
+  dyn: (T, B, c, t, u) => { P.supineRoll(T, (c.s ? 1 : -1) * seg(u, 0, 0.85) * Math.PI * 2); },
+  keys: [K(0, null, { mus: 0.7, lat: 2.2 }), K(0.6, null, { mus: 0.6, lat: 1.6 }), K(0.8, null, { mus: 0.5, lat: 0 })],
+};
+SEQ.scramble = {
+  // gatear rápido hacia un lado y levantarse en la carrera
+  kind: 'move', dur: 1.15, vel: true, brace: false,
+  dyn: (T, B, c, t, u) => {
+    const reach = Math.sin(t * 15);
+    if (u < 0.55) { P.allFours(T, reach); add(T, HEAD, 0, 0.08, 0.05); }
+    else P.crawlRun(T, seg(u, 0.55, 1), reach * (1 - seg(u, 0.55, 1)));
+  },
+  keys: [K(0, null, { mus: 0.85, fwd: 1.6 }), K(0.5, null, { mus: 0.95, fwd: 2.2 }), K(1.15, null, { mus: 1, fwd: 2.4 })],
+};
+SEQ.slide = {
+  // deslizada de béisbol: pasa por abajo, frena y se levanta en un paso
+  kind: 'move', dur: 0.9, vel: true, brace: false,
+  dyn: (T, B, c, t, u) => {
+    if (u < 0.2) blend(T, (X) => P.crouch(X, 0.6), (X) => P.slide(X, c.s), u / 0.2);
+    else if (u < 0.6) P.slide(T, c.s);
+    else blend(T, (X) => P.slide(X, c.s), (X) => P.crouch(X, 0.3), seg(u, 0.6, 1));
+  },
+  keys: [K(0, null, { mus: 0.9, fwd: 4.0 }), K(0.5, null, { mus: 0.85, fwd: 2.0 }), K(0.9, null, { mus: 1, fwd: 0.6 })],
+};
+SEQ.charge = {
+  // embestida con el hombro bajo
+  kind: 'move', dur: 0.7, vel: true, brace: true,
+  dyn: (T, B, c, t, u) => { if (u < 0.75) P.chargeLow(T, c.s); else blend(T, (X) => P.chargeLow(X, c.s), P.stand, seg(u, 0.75, 1)); },
+  keys: [K(0, null, { mus: 1, fwd: 4.2 }), K(0.5, null, { mus: 1, fwd: 4.0 }), K(0.7, null, { mus: 1, fwd: 2.0 })],
+};
+SEQ.duck = {
+  // agacharse de golpe (esquivar) y volver
+  kind: 'move', dur: 0.45, brace: false,
+  dyn: (T, B, c, t, u) => { P.crouch(T, Math.sin(u * Math.PI) * 0.95); },
+  keys: [K(0, null, { mus: 1 }), K(0.45, null, { mus: 1 })],
+};
+SEQ.stagger_steps = {
+  // pasos tambaleantes hacia adelante, doblado, sin llegar a caer
+  kind: 'move', dur: 1.0, vel: true, brace: true,
+  dyn: (T, B, c, t, u) => { blend(T, P.doubleOver, (X) => P.crouchTilt(X, 0.5, c.s), 0.35 + 0.65 * Math.sin(u * Math.PI)); },
+  keys: [K(0, null, { mus: 0.7, fwd: 1.8 }), K(0.6, null, { mus: 0.75, fwd: 1.0 }), K(1.0, null, { mus: 1, fwd: 0.2 })],
+};
+
 for (const name in SEQ) SEQ[name].name = name;
+
+// ═══ SALTOS: pose en el aire por estilo ══════════════════════════════════════
+//  pose(T, u, c): u = 0 despegue … 1 aterrizaje; c = { s, ph }. `prep`:
+//  segundos agachado antes de despegar; `land`: cuánto flexiona al caer.
+export const JUMPS = {
+  hop:      { pose: (T, u, c) => P.airHop(T, Math.sin(u * Math.PI)), prep: 0.10, land: 0.22 },
+  skip:     { pose: (T, u, c) => P.airSkip(T, c.s), prep: 0.05, land: 0.15 },
+  bound:    { pose: (T, u, c) => P.airSplit(T, c.s), prep: 0.12, land: 0.35 },
+  tuck:     { pose: (T, u, c) => blend(T, P.airHop, P.airTuck, Math.sin(u * Math.PI)), prep: 0.14, land: 0.45 },
+  superman: { pose: (T, u, c) => P.airSuperman(T), prep: 0.12, land: 0.5 },
+  kick:     { pose: (T, u, c) => blend(T, (X) => P.airHop(X, 0.5), (X) => P.airKick(X, c.s), seg(u, 0.1, 0.5)), prep: 0.12, land: 0.4 },
+  knee:     { pose: (T, u, c) => P.airKnee(T, c.s), prep: 0.12, land: 0.4 },
+  star:     { pose: (T, u, c) => blend(T, P.airHop, P.airStar, Math.sin(u * Math.PI)), prep: 0.12, land: 0.35 },
+  flail:    { pose: (T, u, c) => P.airFlail(T, c.ph + u * 9), prep: 0.08, land: 0.45 },
+  drop:     { pose: (T, u, c) => P.airDrop(T), prep: 0.0, land: 0.55 },
+  hurdle:   { pose: (T, u, c) => P.hurdle(T, c.s), prep: 0.06, land: 0.3 },
+  wallkick: { pose: (T, u, c) => blend(T, (X) => P.airKick(X, c.s), P.airTuck, seg(u, 0.2, 0.8)), prep: 0.0, land: 0.4 },
+  excited:  { pose: (T, u, c) => { P.airHop(T, 1); add(T, HAL, -0.10, 0.35, 0.10); add(T, HAR, 0.10, 0.35, 0.10); }, prep: 0.06, land: 0.15 },
+};
+for (const name in JUMPS) JUMPS[name].name = name;
+/** Estilos de brinco de los que "pegan saltitos" al correr. */
+export const HOP_STYLES = ['hop', 'skip', 'bound', 'kick', 'flail', 'excited'];
+
+// ═══ TREPADAS y BAJADAS: pose por estilo, curvas de avance y de altura ═══════
+//  pose(T, u, c): c = { rel (tapa − ancla ahora), s }. trv(u): fracción del
+//  avance; hgt(u): fracción de la altura (0 = de salida, 1 = de llegada).
+//  minSpeed: hace falta venir al menos así de rápido. w: pesos por tipo
+//  (`parkour` pisa al tipo cuando el cuerpo tiene el rasgo).
+export const VAULTS = {
+  clamber:  { dur: 1.05, pose: (T, u, c) => P.clamber(T, u, c.rel, c.s), trv: ss, hgt: (u) => seg(u, 0.30, 0.75), minSpeed: 0, maxH: 1.05, w: { walker: 3, jogger: 2, runner: 0.6, brute: 3, player: 1.5, parkour: 0.2 } },
+  speed:    { dur: 0.62, pose: (T, u, c) => P.speedVault(T, u, c.rel, c.s), trv: (u) => u, hgt: (u) => seg(u, 0.15, 0.55), minSpeed: 2.2, maxH: 0.95, w: { walker: 0.2, jogger: 1.5, runner: 3, brute: 0, player: 3, parkour: 3 } },
+  kong:     { dur: 0.60, pose: (T, u, c) => P.kong(T, u, c.rel), trv: (u) => u, hgt: (u) => seg(u, 0.10, 0.50), minSpeed: 2.6, maxH: 1.05, w: { walker: 0, jogger: 0.4, runner: 1.5, brute: 0, player: 2, parkour: 5 } },
+  dash:     { dur: 0.62, pose: (T, u, c) => P.dashVault(T, u, c.rel), trv: (u) => u, hgt: (u) => seg(u, 0.05, 0.40), minSpeed: 2.8, maxH: 0.9, w: { walker: 0, jogger: 0.3, runner: 1, brute: 0, player: 1.5, parkour: 4 } },
+  rollover: { dur: 1.10, pose: (T, u, c) => P.rollOver(T, u, c.rel), trv: ss, hgt: (u) => seg(u, 0.15, 0.45), minSpeed: 1.0, maxH: 1.05, w: { walker: 1.5, jogger: 2, runner: 1, brute: 2, player: 0.5, parkour: 0.5 } },
+  scramble: { dur: 1.25, pose: (T, u, c) => P.scrambleVault(T, u, c.rel), trv: ss, hgt: (u) => seg(u, 0.25, 0.65), minSpeed: 0, maxH: 1.05, w: { walker: 2.5, jogger: 1, runner: 1, brute: 1.5, player: 0, parkour: 0 } },
+};
+for (const name in VAULTS) VAULTS[name].name = name;
+//  Bajadas: trv(u, V) recibe V.edgeF = fracción del avance donde está el borde
+//  (primero se llega al borde, después se baja).
+export const DESCENTS = {
+  step: { dur: 1.0, pose: (T, u, c) => P.stepDown(T, u, c.rel, c.s), trv: (u, V) => { const e = V ? V.edgeF : 0.4; return u < 0.45 ? e * ss(u / 0.45) : e + (1 - e) * seg(u, 0.45, 1); }, hgt: (u) => seg(u, 0.45, 1), w: { walker: 3, jogger: 1.5, runner: 0.4, brute: 3, player: 0.5, parkour: 0 } },
+  sit:  { dur: 1.3, pose: (T, u, c) => P.sitDrop(T, u, c.rel), trv: (u, V) => { const e = V ? V.edgeF : 0.4; return u < 0.4 ? e * ss(u / 0.4) : e + (1 - e) * seg(u, 0.4, 0.85); }, hgt: (u) => seg(u, 0.4, 0.85), w: { walker: 2, jogger: 0.8, runner: 0.1, brute: 2, player: 0, parkour: 0 } },
+};
+for (const name in DESCENTS) DESCENTS[name].name = name;
+/** Sorteo con pesos por tipo; `parkour` reemplaza al tipo cuando el rasgo está. */
+export function pickStyle(table, kind, parkour, rng, filter = null) {
+  let tot = 0; const list = [];
+  for (const name in table) {
+    const s = table[name];
+    if (filter && !filter(s)) continue;
+    const w = s.w ? ((parkour && s.w.parkour != null) ? s.w.parkour : (s.w[kind] ?? 1)) : 1;
+    if (w <= 0) continue;
+    list.push([s, w]); tot += w;
+  }
+  if (!list.length) return null;
+  let r = rng() * tot;
+  for (const [s, w] of list) if ((r -= w) <= 0) return s;
+  return list[list.length - 1][0];
+}
 
 /** Levantadas disponibles para una orientación, con peso por tipo de cuerpo. */
 export function getUpsFor(from) {
@@ -692,11 +1487,13 @@ export function getUpsFor(from) {
   for (const name in SEQ) { const s = SEQ[name]; if (s.kind === 'getup' && s.from === from) out.push(s); }
   return out;
 }
-export function pickWeighted(list, kind, rng) {
+export function pickWeighted(list, kind, rng, parkour = false) {
+  const wOf = (s) => !s.w ? 1 : (parkour && s.w.parkour != null) ? s.w.parkour : (s.w[kind] != null ? s.w[kind] : 1);
   let tot = 0;
-  for (const s of list) tot += (s.w && s.w[kind] != null) ? s.w[kind] : 1;
+  for (const s of list) tot += wOf(s);
+  if (tot <= 0) return list[Math.floor(rng() * list.length)];
   let r = rng() * tot;
-  for (const s of list) { const w = (s.w && s.w[kind] != null) ? s.w[kind] : 1; if ((r -= w) <= 0) return s; }
+  for (const s of list) { const w = wOf(s); if ((r -= w) <= 0) return s; }
   return list[list.length - 1];
 }
 
@@ -749,8 +1546,64 @@ OVER.id_headhang = { dur: 6.0, loop: true, fn: (T, u, k, c) => { const e = 0.6 +
 // — sacudir la cabeza al levantarse (aturdido) —
 OVER.headshake = { dur: 0.9, fn: (T, u, k, c) => { const e = bell(u, 0.3); const a = Math.sin(u * 22) * 0.07 * e; add(T, HEAD, a, -0.02 * e, 0); add(T, NECK, a * 0.4, 0, 0); } };
 
+// — más sacudones por golpe: latigazo, rodillas que ceden, agarrarse la herida, convulsión… —
+OVER.fl_whiplash = { dur: 0.55, fn: (T, u, k, c) => { const e1 = bell(u, 0.15) * k, e2 = bell(clamp01((u - 0.2) / 0.8), 0.3) * k; add(T, HEAD, c.lat * 0.06 * e1, -0.02 * e1, c.along * 0.18 * e1 - c.along * 0.12 * e2); add(T, NECK, 0, 0, c.along * 0.08 * e1 - c.along * 0.05 * e2); add(T, CHEST, 0, 0, c.along * 0.04 * e1); } };
+OVER.fl_knee_dip = { dur: 0.5, fn: (T, u, k, c) => { const e = bell(u, 0.25) * k * 0.16; for (const i of [HIP, HPL, HPR, CHEST, NECK, HEAD, SHL, SHR]) add(T, i, 0, -e, 0); add(T, KNL, 0, -e * 0.3, e * 0.5); add(T, KNR, 0, -e * 0.3, e * 0.5); add(T, HEAD, 0, -e * 0.4, e * 0.6); } };
+OVER.fl_clutch_arm = { dur: 0.9, fn: (T, u, k, c) => { const e = smooth(clamp01(u / 0.2)) * smooth(clamp01((1 - u) / 0.25)), sx = c.sx; const el = sx > 0 ? ELR : ELL, ha = sx > 0 ? HAL : HAR;
+  set(T, ha, T[ha * 3] * (1 - e) + sx * 0.24 * e, T[ha * 3 + 1] * (1 - e) + 1.20 * e, T[ha * 3 + 2] * (1 - e) + 0.12 * e); add(T, el, sx * 0.04 * e, -0.04 * e, 0.08 * e); add(T, HEAD, sx * 0.05 * e, -0.05 * e, 0.06 * e); add(T, CHEST, sx * 0.03 * e, -0.02 * e, 0.03 * e); } };
+OVER.fl_clutch_face = { dur: 0.8, fn: (T, u, k, c) => { const e = smooth(clamp01(u / 0.15)) * smooth(clamp01((1 - u) / 0.3)); for (let s = 0; s < 2; s++) { const ha = s ? HAR : HAL, sx = s ? 1 : -1; set(T, ha, T[ha * 3] * (1 - e) + sx * 0.10 * e, T[ha * 3 + 1] * (1 - e) + 1.62 * e, T[ha * 3 + 2] * (1 - e) + 0.16 * e); } add(T, HEAD, 0, -0.06 * e, c.along * 0.10 * e); add(T, CHEST, 0, -0.03 * e, 0.04 * e); } };
+OVER.fl_clutch_gut = { dur: 1.4, fn: (T, u, k, c) => { const e = smooth(clamp01(u / 0.15)) * smooth(clamp01((1 - u) / 0.35)); for (let s = 0; s < 2; s++) { const ha = s ? HAR : HAL, sx = s ? 1 : -1; set(T, ha, T[ha * 3] * (1 - e) + sx * 0.08 * e, T[ha * 3 + 1] * (1 - e) + 0.98 * e, T[ha * 3 + 2] * (1 - e) + 0.15 * e); } add(T, CHEST, 0, -0.08 * e, 0.10 * e); add(T, NECK, 0, -0.13 * e, 0.15 * e); add(T, HEAD, 0, -0.18 * e, 0.18 * e); add(T, SHL, 0, -0.08 * e, 0.08 * e); add(T, SHR, 0, -0.08 * e, 0.08 * e); } };
+OVER.fl_spin_shoulder = { dur: 0.5, fn: (T, u, k, c) => { const e = bell(u, 0.2) * k, sx = c.sx; const sh = sx > 0 ? SHR : SHL, osh = sx > 0 ? SHL : SHR, ha = sx > 0 ? HAR : HAL; add(T, sh, 0, 0.02 * e, c.along * 0.20 * e); add(T, osh, 0, 0, -c.along * 0.12 * e); add(T, HEAD, sx * 0.08 * e, 0, c.along * 0.08 * e); add(T, CHEST, sx * 0.03 * e, 0, c.along * 0.05 * e); add(T, ha, sx * 0.12 * e, 0.16 * e, c.along * 0.25 * e); } };
+OVER.fl_convulse = { dur: 0.6, fn: (T, u, k, c) => { const e = bell(u, 0.1) * k; const j = Math.sin(u * 55) * 0.045 * e, j2 = Math.cos(u * 47) * 0.035 * e; add(T, HEAD, j, -0.03 * e + j2 * 0.5, c.along * 0.08 * e); add(T, CHEST, j * 0.6, j2 * 0.4, c.along * 0.05 * e); add(T, HAL, -j * 1.5, 0.14 * e + j2, j); add(T, HAR, j * 1.5, 0.14 * e - j2, -j); add(T, KNL, j * 0.5, 0.04 * e, 0); add(T, KNR, -j * 0.5, 0.04 * e, 0); } };
+OVER.fl_hip_twist = { dur: 0.5, fn: (T, u, k, c) => { const e = bell(u, 0.2) * k, sx = c.sx; add(T, HPL, -sx * 0.03 * e, 0, sx * c.lat * 0.10 * e); add(T, HPR, sx * 0.03 * e, 0, -sx * c.lat * 0.10 * e); add(T, HIP, c.lat * 0.06 * e, -0.02 * e, c.along * 0.06 * e); add(T, CHEST, -c.lat * 0.04 * e, 0, 0); add(T, HEAD, -c.lat * 0.06 * e, 0, 0); } };
+OVER.fl_shrug_roll = { dur: 0.55, fn: (T, u, k, c) => { const e = bell(u, 0.2) * k, sx = c.sx; const sh = sx > 0 ? SHR : SHL; add(T, sh, 0, 0.10 * e, -0.04 * e); add(T, HEAD, -sx * 0.10 * e, -0.03 * e, 0); add(T, NECK, -sx * 0.05 * e, -0.02 * e, 0); add(T, CHEST, -sx * 0.02 * e, 0, c.along * 0.05 * e); } };
+OVER.fl_balance_arms = { dur: 0.7, fn: (T, u, k, c) => { const e = bell(u, 0.3) * k; add(T, HAL, -0.28 * e, 0.42 * e, -0.08 * e); add(T, HAR, 0.28 * e, 0.42 * e, -0.08 * e); add(T, ELL, -0.14 * e, 0.22 * e, -0.05 * e); add(T, ELR, 0.14 * e, 0.22 * e, -0.05 * e); add(T, CHEST, 0, 0, -c.along * 0.05 * e); } };
+OVER.fl_crumple_partial = { dur: 0.8, fn: (T, u, k, c) => { const e = bell(u, 0.3) * k * 0.30, sx = c.sx; for (const i of [HIP, HPL, HPR, CHEST, NECK, HEAD, SHL, SHR]) add(T, i, 0, -e, 0); add(T, sx > 0 ? KNR : KNL, 0, -e * 0.4, e * 0.6); add(T, CHEST, sx * 0.04 * e, 0, e * 0.4); add(T, HEAD, sx * 0.06 * e, -e * 0.3, e * 0.6); add(T, HAL, 0, -e * 0.5, e); add(T, HAR, 0, -e * 0.5, e); } };
+
+// — heridas sostenidas (bucle): una mano apretando la herida mientras sigue andando; k = cuánto —
+OVER.wd_gut = { dur: 2.0, loop: true, fn: (T, u, k, c) => { const e = k, sx = c.sx; const ha = sx > 0 ? HAR : HAL; set(T, ha, T[ha * 3] * (1 - e) + sx * 0.06 * e, T[ha * 3 + 1] * (1 - e) + 0.98 * e, T[ha * 3 + 2] * (1 - e) + 0.14 * e); add(T, CHEST, 0, -0.04 * e, 0.06 * e); add(T, NECK, 0, -0.07 * e, 0.09 * e); add(T, HEAD, 0, -0.10 * e, 0.10 * e); } };
+OVER.wd_shoulder = { dur: 2.0, loop: true, fn: (T, u, k, c) => { const e = k, sx = c.sx; const ha = sx > 0 ? HAL : HAR; set(T, ha, T[ha * 3] * (1 - e) + sx * 0.20 * e, T[ha * 3 + 1] * (1 - e) + 1.42 * e, T[ha * 3 + 2] * (1 - e) + 0.08 * e); add(T, sx > 0 ? SHR : SHL, 0, -0.03 * e, 0.04 * e); add(T, HEAD, sx * 0.03 * e, -0.02 * e, 0); } };
+OVER.wd_neck = { dur: 2.0, loop: true, fn: (T, u, k, c) => { const e = k, sx = c.sx; const ha = sx > 0 ? HAR : HAL; set(T, ha, T[ha * 3] * (1 - e) + sx * 0.07 * e, T[ha * 3 + 1] * (1 - e) + 1.52 * e, T[ha * 3 + 2] * (1 - e) + 0.08 * e); add(T, HEAD, sx * 0.06 * e, -0.03 * e, 0); add(T, NECK, sx * 0.03 * e, 0, 0); } };
+OVER.wd_thigh = { dur: 2.0, loop: true, fn: (T, u, k, c) => { const e = k, sx = c.sx; const ha = sx > 0 ? HAR : HAL; set(T, ha, T[ha * 3] * (1 - e) + sx * 0.20 * e, T[ha * 3 + 1] * (1 - e) + 0.72 * e, T[ha * 3 + 2] * (1 - e) + 0.16 * e); add(T, CHEST, sx * 0.02 * e, -0.03 * e, 0.04 * e); add(T, HEAD, sx * 0.03 * e, -0.05 * e, 0.05 * e); } };
+OVER.wd_head = { dur: 2.0, loop: true, fn: (T, u, k, c) => { const e = k, sx = c.sx; const ha = sx > 0 ? HAR : HAL; set(T, ha, T[ha * 3] * (1 - e) + sx * 0.11 * e, T[ha * 3 + 1] * (1 - e) + 1.70 * e, T[ha * 3 + 2] * (1 - e) + 0.06 * e); add(T, HEAD, sx * 0.02 * e, -0.03 * e, 0.03 * e); } };
+/** Herida sostenida por zona del hueso: 0 cabeza · 1 torso · 2 brazo · 3 pierna. */
+export const WOUNDS = { 0: 'wd_head', 1: 'wd_gut', 2: 'wd_shoulder', 3: 'wd_thigh' };
+
+// — más ataques — (c.sx: lado que ataca)
+OVER.atk_headbutt = { dur: 0.5, fn: (T, u, k, c) => { const w = smooth(clamp01(u / 0.3)), h = smooth(clamp01((u - 0.3) / 0.15)) * (1 - smooth(clamp01((u - 0.6) / 0.4))); add(T, HEAD, 0, 0.03 * w - 0.10 * h, -0.10 * w + 0.32 * h); add(T, NECK, 0, 0.02 * w - 0.05 * h, -0.05 * w + 0.16 * h); add(T, CHEST, 0, 0, -0.03 * w + 0.08 * h); for (let s = 0; s < 2; s++) { const ha = s ? HAR : HAL, sx = s ? 1 : -1; set(T, ha, sx * 0.22, 1.25, 0.30 + 0.15 * h); } } };
+OVER.atk_claw = { dur: 0.5, fn: (T, u, k, c) => { const sx = c.sx, e = smooth(clamp01(u / 0.4)); const ha = sx > 0 ? HAR : HAL, el = sx > 0 ? ELR : ELL; set(T, ha, sx * (0.20 - 0.35 * e), 1.75 - 1.05 * e, 0.10 + 0.50 * e); add(T, el, sx * 0.10, 0.25 * (1 - e), 0.10 * e); add(T, CHEST, 0, 0.02 * (1 - e) - 0.05 * e, 0.06 * e); add(T, HEAD, 0, -0.04 * e, 0.08 * e); } };
+OVER.atk_uppercut = { dur: 0.5, fn: (T, u, k, c) => { const sx = c.sx, wind = smooth(clamp01(u / 0.28)), up = smooth(clamp01((u - 0.28) / 0.18)), rel = smooth(clamp01((u - 0.7) / 0.3)), e = 1 - rel; const ha = sx > 0 ? HAR : HAL, el = sx > 0 ? ELR : ELL;
+  set(T, ha, sx * (0.30 - 0.20 * up) * e + T[ha * 3] * rel, (0.70 - 0.15 * wind + 1.05 * up) * e + T[ha * 3 + 1] * rel, (0.05 + 0.55 * up) * e + T[ha * 3 + 2] * rel); add(T, el, sx * 0.06 * e, (-0.10 * wind + 0.35 * up) * e, 0.25 * up * e);
+  for (const i of [HIP, HPL, HPR, CHEST, NECK, HEAD, SHL, SHR]) add(T, i, 0, (-0.12 * wind * (1 - up) + 0.06 * up) * e, 0); add(T, CHEST, 0, 0, 0.08 * up * e); add(T, HEAD, 0, 0.02 * up * e, -0.04 * up * e); } };
+OVER.atk_haymaker = { dur: 0.85, fn: (T, u, k, c) => { const sx = c.sx, wind = smooth(clamp01(u / 0.45)), sw = smooth(clamp01((u - 0.45) / 0.2)), rel = smooth(clamp01((u - 0.75) / 0.25)), e = 1 - rel; const ha = sx > 0 ? HAR : HAL, el = sx > 0 ? ELR : ELL;
+  const hx = sx * (0.55 * wind - 1.0 * sw), hy = 1.20 + 0.40 * wind - 0.15 * sw, hz = -0.35 * wind + 0.95 * sw;
+  set(T, ha, hx * e + T[ha * 3] * rel, hy * e + T[ha * 3 + 1] * rel, hz * e + T[ha * 3 + 2] * rel);
+  add(T, el, sx * 0.20 * wind * (1 - sw) * e, 0.25 * wind * e, (-0.10 * wind + 0.25 * sw) * e);
+  const tw = (-0.08 * wind + 0.10 * sw) * e;
+  add(T, CHEST, sx * tw, 0, (-0.04 * wind + 0.10 * sw) * e); add(T, SHR, sx * tw * 0.6, 0, sx * tw); add(T, SHL, sx * tw * 0.6, 0, -sx * tw); add(T, HEAD, sx * tw * 0.8, 0, 0.06 * sw * e); } };
+OVER.atk_backhand = { dur: 0.42, fn: (T, u, k, c) => { const sx = c.sx, e = smooth(clamp01(u / 0.35)), r = bell(u, 0.35); const ha = sx > 0 ? HAR : HAL, el = sx > 0 ? ELR : ELL; set(T, ha, sx * (-0.35 + 1.05 * e), 1.20 + 0.10 * r, 0.25 + 0.30 * e); add(T, el, sx * (-0.15 + 0.30 * e), 0.10 * r, 0.10 * e); add(T, CHEST, sx * 0.06 * e, 0, 0.04 * e); add(T, HEAD, sx * 0.06 * e, 0, 0.03 * e); } };
+OVER.atk_knee = { dur: 0.55, fn: (T, u, k, c) => { const sx = c.sx, e = smooth(clamp01(u / 0.3)) * (1 - smooth(clamp01((u - 0.6) / 0.4))); const kn = sx > 0 ? KNR : KNL, ft = sx > 0 ? FTR : FTL; add(T, kn, 0, 0.45 * e, 0.30 * e); add(T, ft, 0, 0.40 * e, 0.05 * e); for (let s = 0; s < 2; s++) { const ha = s ? HAR : HAL, hx = s ? 1 : -1; set(T, ha, T[ha * 3] * (1 - e) + hx * 0.22 * e, T[ha * 3 + 1] * (1 - e) + 1.30 * e, T[ha * 3 + 2] * (1 - e) + 0.45 * e); } add(T, CHEST, 0, -0.04 * e, 0.06 * e); add(T, HEAD, 0, -0.06 * e, 0.08 * e); add(T, HIP, -sx * 0.03 * e, 0, 0.04 * e); } };
+OVER.atk_kick = { dur: 0.6, fn: (T, u, k, c) => { const sx = c.sx, ch = smooth(clamp01(u / 0.25)), ext = smooth(clamp01((u - 0.25) / 0.15)) * (1 - smooth(clamp01((u - 0.6) / 0.4))); const kn = sx > 0 ? KNR : KNL, ft = sx > 0 ? FTR : FTL; add(T, kn, 0, 0.40 * ch, 0.25 * ch + 0.15 * ext); add(T, ft, 0, 0.30 * ch + 0.35 * ext, 0.05 * ch + 0.60 * ext); add(T, HIP, 0, 0, -0.06 * ext); add(T, CHEST, 0, 0.02 * ext, -0.12 * ext); add(T, HEAD, 0, 0.02 * ext, -0.14 * ext); add(T, HAL, -0.15 * ch, 0.25 * ch, -0.10 * ext); add(T, HAR, 0.15 * ch, 0.25 * ch, -0.10 * ext); } };
+OVER.atk_stomp = { dur: 0.7, fn: (T, u, k, c) => { const sx = c.sx, lift = smooth(clamp01(u / 0.4)) * (1 - smooth(clamp01((u - 0.4) / 0.12))), dn = smooth(clamp01((u - 0.4) / 0.12)) * (1 - smooth(clamp01((u - 0.75) / 0.25))); const kn = sx > 0 ? KNR : KNL, ft = sx > 0 ? FTR : FTL; add(T, kn, 0, 0.45 * lift, 0.28 * lift); add(T, ft, 0, 0.55 * lift, 0.25 * lift); for (const i of [HIP, HPL, HPR, CHEST, NECK, HEAD, SHL, SHR]) add(T, i, 0, 0.04 * lift - 0.10 * dn, 0.04 * dn); add(T, HAL, -0.10 * lift, 0.30 * lift, 0); add(T, HAR, 0.10 * lift, 0.30 * lift, 0); add(T, HEAD, 0, -0.06 * dn, 0.10 * dn); } };
+OVER.atk_frenzy = { dur: 0.95, fn: (T, u, k, c) => { const t = u * 0.95; for (let s = 0; s < 2; s++) { const ha = s ? HAR : HAL, el = s ? ELR : ELL, sx = s ? 1 : -1; const sw = Math.sin(t * 7.5 + (s ? Math.PI : 0)); set(T, ha, sx * (0.45 - 0.55 * Math.max(0, sw)), 1.10 + 0.20 * Math.max(0, -sw), 0.10 + 0.55 * Math.max(0, sw)); add(T, el, sx * (0.15 - 0.20 * Math.max(0, sw)), 0.05, 0.10 * Math.max(0, sw)); } const lean = smooth(clamp01(u / 0.2)) * (1 - smooth(clamp01((u - 0.8) / 0.2))); add(T, CHEST, 0, -0.03 * lean, 0.10 * lean); add(T, HEAD, Math.sin(t * 15) * 0.03, -0.04 * lean, 0.12 * lean); } };
+OVER.atk_shake = { dur: 0.9, fn: (T, u, k, c) => { const grab = smooth(clamp01(u / 0.2)), sh = u > 0.2 && u < 0.8 ? Math.sin((u - 0.2) * 40) : 0; for (let s = 0; s < 2; s++) { const ha = s ? HAR : HAL, el = s ? ELR : ELL, sx = s ? 1 : -1; set(T, ha, sx * (0.28 - 0.30 * grab) + sh * 0.06, 1.15 + sh * 0.05, 0.20 + 0.45 * grab); add(T, el, sx * 0.08 * grab, sh * 0.04, 0.12 * grab); } add(T, CHEST, sh * 0.04, 0, 0.08 * grab); add(T, HEAD, sh * 0.06, -0.02 * grab, 0.12 * grab); add(T, SHL, sh * 0.04, 0, 0.04 * grab); add(T, SHR, sh * 0.04, 0, 0.04 * grab); } };
+OVER.atk_spin_swipe = { dur: 0.8, fn: (T, u, k, c) => { const sx = c.sx, e = smooth(clamp01(u / 0.2)) * (1 - smooth(clamp01((u - 0.75) / 0.25))); const ha = sx > 0 ? HAR : HAL, el = sx > 0 ? ELR : ELL, oh = sx > 0 ? HAL : HAR; set(T, ha, T[ha * 3] * (1 - e) + sx * 0.70 * e, T[ha * 3 + 1] * (1 - e) + 1.35 * e, T[ha * 3 + 2] * (1 - e) + 0.15 * e); add(T, el, sx * 0.30 * e, 0.20 * e, 0.05 * e); add(T, oh, -sx * 0.10 * e, 0.35 * e, 0); add(T, CHEST, sx * 0.04 * e, -0.03 * e, 0); add(T, HEAD, sx * 0.05 * e, -0.02 * e, 0); } };
+OVER.atk_slam_fists = { dur: 0.9, fn: (T, u, k, c) => { const up = smooth(clamp01(u / 0.4)), dn = smooth(clamp01((u - 0.4) / 0.15)) * (1 - smooth(clamp01((u - 0.7) / 0.3))); for (let s = 0; s < 2; s++) { const ha = s ? HAR : HAL, el = s ? ELR : ELL, sx = s ? 1 : -1; set(T, ha, sx * 0.20, 1.95 * up - 1.35 * dn + (1 - up) * 0.86, -0.15 * up + 0.85 * dn); set(T, el, sx * 0.28, 1.55 * up - 0.75 * dn + (1 - up) * 1.15, -0.10 * up + 0.45 * dn); } for (const i of [HIP, HPL, HPR, CHEST, NECK, HEAD, SHL, SHR]) add(T, i, 0, 0.05 * up - 0.22 * dn, 0.12 * dn); add(T, CHEST, 0, 0, -0.06 * up + 0.10 * dn); add(T, HEAD, 0, 0.02 * up - 0.10 * dn, -0.08 * up + 0.22 * dn); add(T, KNL, 0, 0, 0.10 * dn); add(T, KNR, 0, 0, 0.10 * dn); } };
+OVER.atk_bite_neck = { dur: 0.75, fn: (T, u, k, c) => { const grab = smooth(clamp01(u / 0.25)), bite = bell(clamp01((u - 0.25) / 0.5), 0.4); for (let s = 0; s < 2; s++) { const ha = s ? HAR : HAL, sx = s ? 1 : -1; set(T, ha, sx * (0.28 - 0.32 * grab), 1.35 - 0.05 * bite, 0.20 + 0.42 * grab); } add(T, HEAD, c.sx * 0.06 * bite, -0.08 * bite + 0.02 * grab, 0.10 * grab + 0.24 * bite); add(T, NECK, 0, -0.04 * bite, 0.06 * grab + 0.12 * bite); add(T, CHEST, 0, -0.02 * bite, 0.08 * grab + 0.05 * bite); } };
+OVER.atk_lunge_grab = { dur: 0.7, fn: (T, u, k, c) => { const e = smooth(clamp01(u / 0.2)), hold = u > 0.2 ? 1 : e; for (let s = 0; s < 2; s++) { const ha = s ? HAR : HAL, el = s ? ELR : ELL, sx = s ? 1 : -1; set(T, ha, sx * (0.32 - 0.22 * hold), 1.20 + 0.15 * hold, 0.25 + 0.60 * hold); add(T, el, sx * 0.05 * hold, 0.10 * hold, 0.25 * hold); } add(T, CHEST, 0, -0.02 * hold, 0.14 * hold); add(T, NECK, 0, 0, 0.18 * hold); add(T, HEAD, 0, -0.03 * hold, 0.22 * hold); } };
+OVER.atk_double_rake = { dur: 0.6, fn: (T, u, k, c) => { const e = smooth(clamp01(u / 0.4)); for (let s = 0; s < 2; s++) { const ha = s ? HAR : HAL, el = s ? ELR : ELL, sx = s ? 1 : -1; set(T, ha, sx * (0.45 - 0.20 * e), 1.80 - 1.10 * e, 0.10 + 0.50 * e); add(T, el, sx * 0.15, 0.20 * (1 - e), 0.10 * e); } add(T, CHEST, 0, 0.03 * (1 - e) - 0.06 * e, 0.08 * e); add(T, HEAD, 0, -0.06 * e, 0.10 * e); } };
+
+// — atrapar la pared con las manos (el ágil que se estrella no se cae: frena con los brazos y rebota) —
+OVER.wall_catch = { dur: 0.6, fn: (T, u, k, c) => { const e = smooth(clamp01(u / 0.12)) * (1 - smooth(clamp01((u - 0.45) / 0.55))); for (let s = 0; s < 2; s++) { const ha = s ? HAR : HAL, el = s ? ELR : ELL, sx = s ? 1 : -1; set(T, ha, T[ha * 3] * (1 - e) + sx * 0.24 * e, T[ha * 3 + 1] * (1 - e) + 1.30 * e, T[ha * 3 + 2] * (1 - e) + 0.62 * e); add(T, el, sx * 0.06 * e, 0.06 * e, 0.25 * e); } const rec = bell(u, 0.25) * k; add(T, HEAD, 0, -0.03 * rec, -0.12 * rec); add(T, NECK, 0, 0, -0.06 * rec); add(T, CHEST, 0, -0.02 * rec, -0.04 * rec); add(T, SHL, 0, 0, 0.06 * e); add(T, SHR, 0, 0, 0.06 * e); } };
+
+// — más tics de quieto —
+OVER.id_stretch = { dur: 4.2, loop: true, fn: (T, u, k, c) => { const e = smooth(clamp01((u - 0.2) / 0.3)) * smooth(clamp01((0.9 - u) / 0.3)); add(T, HAL, -0.05 * e, 0.75 * e, 0.05 * e); add(T, HAR, 0.05 * e, 0.75 * e, 0.05 * e); add(T, ELL, -0.08 * e, 0.40 * e, 0); add(T, ELR, 0.08 * e, 0.40 * e, 0); add(T, CHEST, 0, 0.03 * e, -0.04 * e); add(T, HEAD, 0, 0.02 * e, -0.08 * e); } };
+OVER.id_stomp = { dur: 3.0, loop: true, fn: (T, u, k, c) => { const t = u * 3.0; const e = t > 0.8 && t < 1.4 ? Math.sin((t - 0.8) / 0.6 * Math.PI) : 0; add(T, FTR, 0, 0.18 * e, 0.06 * e); add(T, KNR, 0.02 * e, 0.14 * e, 0.10 * e); add(T, HIP, -0.03 * e, -0.02 * e, 0); add(T, CHEST, -0.04 * e, -0.02 * e, 0); add(T, HEAD, -0.03 * e, -0.03 * e, 0.03 * e); } };
+OVER.id_claw_air = { dur: 2.6, loop: true, fn: (T, u, k, c) => { const t = u * 2.6; const e = t > 0.5 && t < 2.0 ? Math.sin((t - 0.5) / 1.5 * Math.PI) : 0; const g = Math.sin(t * 9) * 0.05 * e; set(T, HAR, T[HAR * 3] * (1 - e) + (0.30 + g) * e, T[HAR * 3 + 1] * (1 - e) + (1.35 + g * 0.6) * e, T[HAR * 3 + 2] * (1 - e) + 0.45 * e); add(T, ELR, 0.10 * e, 0.10 * e, 0.10 * e); add(T, HEAD, 0.03 * e, -0.02 * e, 0.06 * e); } };
+OVER.id_bob = { dur: 1.6, loop: true, fn: (T, u, k, c) => { const e = 0.5 - 0.5 * Math.cos(u * Math.PI * 2); const dy = -0.07 * e; for (const i of [HIP, HPL, HPR, CHEST, NECK, HEAD, SHL, SHR]) add(T, i, 0, dy, 0); add(T, KNL, 0, dy * 0.3, 0.05 * e); add(T, KNR, 0, dy * 0.3, 0.05 * e); add(T, HAL, 0, -dy * 0.5, 0); add(T, HAR, 0, -dy * 0.5, 0); } };
+
 for (const name in OVER) OVER[name].name = name;
-export const IDLE_OVERLAYS = ['id_twitch', 'id_look', 'id_scratch', 'id_hunch', 'id_spasm', 'id_retch', 'id_sway', 'id_headhang'];
+export const IDLE_OVERLAYS = ['id_twitch', 'id_look', 'id_scratch', 'id_hunch', 'id_spasm', 'id_retch', 'id_sway', 'id_headhang', 'id_stretch', 'id_stomp', 'id_claw_air'];
 
 // ═══ ESTILOS DE MARCHA ═══════════════════════════════════════════════════════
 //  Parámetros que `_syncTarget` lee. Cada cuerpo sortea uno al nacer.
@@ -770,6 +1623,28 @@ export const RUN_STYLES = [
   { name: 'crouched', lean: 0.10, armStyle: 'wide',    strideMul: 1.00, crouchRun: 0.22, bobMul: 0.8 },
   { name: 'stomp',    lean: 0.06, armStyle: 'high',    strideMul: 0.90, stomp: 1.5, bobMul: 1.5 },
   { name: 'loping',   lean: 0.09, armStyle: 'low',     strideMul: 1.30, bobMul: 1.1, lift: 1.4, jitter: 0.3 },
+  //  segunda tanda: brazos que cuelgan de verdad (sin músculo), garras, cabeza
+  //  atrás gritando, gorila, galope, de costado, en puntas de pie, borracho…
+  { name: 'claws',    lean: 0.10, armStyle: 'claw',    strideMul: 1.05, bobMul: 1.1, headDown: 0.04 },
+  { name: 'classic',  lean: 0.02, armStyle: 'zombie',  strideMul: 0.95, bobMul: 0.9, lift: 0.6 },
+  { name: 'ragarms',  lean: 0.12, armStyle: 'limp',    strideMul: 1.10, bobMul: 1.3, armMuscle: 0 },
+  { name: 'salute',   lean: 0.06, armStyle: 'one_up',  strideMul: 1.05, bobMul: 1.0, zigzag: 0.05 },
+  { name: 'hugger',   lean: 0.09, armStyle: 'hug',     strideMul: 1.00, bobMul: 1.1, hunch: 0.05 },
+  { name: 'headache', lean: 0.07, armStyle: 'head_hold', strideMul: 0.95, bobMul: 1.2, headDown: 0.08, zigzag: 0.12 },
+  { name: 'gorilla',  lean: 0.24, hunch: 0.14, armStyle: 'gorilla', strideMul: 1.15, bobMul: 1.6, lift: 1.3, crouchRun: 0.18 },
+  { name: 'screamer', lean: 0.02, armStyle: 'scream',  strideMul: 1.05, bobMul: 1.1, headBack: 0.14 },
+  { name: 'trailing', lean: 0.18, armStyle: 'trailing', strideMul: 1.20, bobMul: 1.0, headDown: 0.06 },
+  { name: 'grabby',   lean: 0.08, armStyle: 'reach_high', strideMul: 1.00, bobMul: 1.0, reachHi: 0.25 },
+  { name: 'athlete',  lean: 0.10, armStyle: 'sprinter', strideMul: 1.30, bobMul: 0.8, lift: 1.6 },
+  { name: 'crossed',  lean: 0.05, armStyle: 'chest',   strideMul: 0.90, bobMul: 1.2, zigzag: 0.08, jitter: 0.4 },
+  { name: 'sidewind', lean: 0.06, armStyle: 'wide',    strideMul: 1.00, bobMul: 1.1, yawOff: 0.55 },
+  { name: 'gallop',   lean: 0.12, armStyle: 'pump',    strideMul: 1.15, bobMul: 1.5, legPhase: 0.62, lift: 1.3 },
+  { name: 'bouncy',   lean: 0.05, armStyle: 'flail',   strideMul: 0.95, bobMul: 1.0, bounce: 0.05, lift: 1.5 },
+  { name: 'tiptoe',   lean: 0.04, armStyle: 'high',    strideMul: 0.70, bobMul: 0.6, lift: 2.0, jitter: 0.2 },
+  { name: 'shuffle',  lean: 0.03, armStyle: 'reach',   strideMul: 0.55, bobMul: 0.8, lift: 0.4, jitter: 0.7 },
+  { name: 'drunk',    lean: 0.06, armStyle: 'windmill', strideMul: 1.00, bobMul: 1.3, zigzag: 0.22, sway: 2.2, wobble: 1.8 },
+  { name: 'backlean', lean: -0.08, armStyle: 'back',   strideMul: 1.10, bobMul: 1.2, headBack: 0.08 },
+  { name: 'stiffleg', lean: 0.05, armStyle: 'zombie',  strideMul: 0.85, bobMul: 1.4, lift: 0.3 },
 ];
 export const WALK_STYLES = [
   { name: 'shamble',  lean: 0.03, hunch: 0.06, armStyle: 'reach', strideMul: 0.85, bobMul: 0.9, lurch: 0.5 },
@@ -782,4 +1657,14 @@ export const WALK_STYLES = [
   { name: 'tilted',   lean: 0.04, armStyle: 'one',     strideMul: 0.88, headTilt: 0.28, shoulder: 0.06 },
   { name: 'wobble',   lean: 0.03, armStyle: 'wide',    strideMul: 0.90, wobble: 1.6, sway: 1.4, bobMul: 1.3 },
   { name: 'limping',  lean: 0.05, armStyle: 'reach',   strideMul: 0.85, limp: 0.35, bobMul: 1.8, lurch: 0.4 },
+  { name: 'crawlish', lean: 0.16, hunch: 0.16, armStyle: 'gorilla', strideMul: 0.90, bobMul: 1.2, headDown: 0.10 },
+  { name: 'migraine', lean: 0.04, hunch: 0.05, armStyle: 'head_hold', strideMul: 0.80, bobMul: 1.0, zigzag: 0.10, lurch: 0.5 },
+  { name: 'huggy',    lean: 0.05, hunch: 0.08, armStyle: 'hug',     strideMul: 0.85, bobMul: 0.9, jitter: 0.5 },
+  { name: 'clawing',  lean: 0.05, armStyle: 'claw',    strideMul: 0.90, bobMul: 1.0, reachHi: 0.05 },
+  { name: 'proud',    lean: -0.05, armStyle: 'back',   strideMul: 0.95, bobMul: 0.8, headBack: 0.10 },
+  { name: 'crab',     lean: 0.03, armStyle: 'wide',    strideMul: 0.85, bobMul: 1.0, yawOff: 0.9 },
+  { name: 'dainty',   lean: 0.02, armStyle: 'high',    strideMul: 0.65, bobMul: 0.7, lift: 1.8 },
+  { name: 'springy',  lean: 0.04, armStyle: 'low',     strideMul: 0.90, bobMul: 1.2, bounce: 0.04, lift: 1.3 },
+  { name: 'dragging', lean: 0.10, hunch: 0.06, armStyle: 'trailing', strideMul: 0.85, bobMul: 1.1, dragLeg: 1, limp: 0.6 },
+  { name: 'howler',   lean: 0.00, armStyle: 'scream',  strideMul: 0.90, bobMul: 1.0, headBack: 0.16, jitter: 0.3 },
 ];

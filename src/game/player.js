@@ -70,14 +70,23 @@ export class Player {
     const crouchF = 1 - 0.5 * B.crouch;
     const speed = (input.run ? this.runSpeed : this.walkSpeed) * slow * crouchF * (B.crawling ? 0.4 : 1);
     B.wantX = vx; B.wantZ = vz; B.wantSpeed = mag * speed;
+    // — en el piso o levantándose no se queda quieto: el empuje va al cuerpo
+    //   (rueda de costado, gatea, y la levantada mira hacia donde aprieta) —
+    if ((B.state === 'down' || B.state === 'rising' || B.state === 'move') && mag > 0.3) B.groundDrive(vx, vz, input.run ? 2.0 : 1.4);
+    // — rodada de esquive: C corriendo (o el pedido explícito) —
+    if (input.roll && B.inControl && mag > 0.3 && B.speed > 1.8) B.roll(vx, vz);
 
-    // apuntar: el cuerpo mira al mouse
+    // apuntar: el cuerpo mira al mouse… sólo cuando el cuerpo es suyo. Una
+    // levantada, una rodada o una caída tienen su propio marco: si el mouse
+    // lo girara a mitad de camino, la pose se retorcería debajo del cuerpo
     this.aim.x = input.aimX; this.aim.z = input.aimZ;
     const ax = this.aim.x - this.x, az = this.aim.z - this.z;
     if (Math.hypot(ax, az) > 0.25) this.aimYaw = Math.atan2(ax, az);
-    // giro suave pero rápido
-    const turn = 14 * dt;
-    B.yaw += clamp(angDelta(B.yaw, this.aimYaw), -turn, turn);
+    if (B.state === 'up' && !B.seq) {
+      // giro suave pero rápido (en el aire, más lento)
+      const turn = (B.flight ? 5 : 14) * dt;
+      B.yaw += clamp(angDelta(B.yaw, this.aimYaw), -turn, turn);
+    }
 
     this.arsenal.update(dt);
 

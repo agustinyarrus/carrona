@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Zombis top-down con ragdoll activo: física XPBD propia, músculos PD, marcha por IK y biblioteca de movimientos físicos, en Three.js",
   "scripts": {
-    "test": "node test/t_world.mjs && node test/t_ragdoll.mjs && node test/t_nav.mjs && node test/t_props.mjs && node test/t_realism.mjs && node test/t_horde.mjs && node test/t_stampede.mjs && node test/t_hits.mjs && node test/t_anim.mjs && node test/t_moves.mjs",
+    "test": "node test/t_world.mjs && node test/t_ragdoll.mjs && node test/t_nav.mjs && node test/t_props.mjs && node test/t_realism.mjs && node test/t_horde.mjs && node test/t_stampede.mjs && node test/t_hits.mjs && node test/t_anim.mjs && node test/t_moves.mjs && node test/t_parkour.mjs",
     "serve": "python serve.py"
   }
 }
