@@ -61,7 +61,8 @@ const runner = (w, x, z, rng) => new Ragdoll(w, { x, z, yaw: 0, stride: 0.32, ar
   run(w, 3, () => { if (R.slams > 0 || R.bumps > 0) R.wantSpeed = 0; if (!W.upright) { someoneFell = true; wallerFell = true; } if (!R.upright) { someoneFell = true; runnerFell = true; } });
   ok('el choque se registra (tropezón mutuo)', R.bumps >= 1 || R.slams >= 1, `bumps=${R.bumps} slams=${R.slams}`);
   ok('el choque tira a alguno de los dos', someoneFell, `caminante=${wallerFell} corredor=${runnerFell}`);
-  ok('el caminante fue desplazado', Math.hypot(W.x, W.z - 3.0) > 0.4, `d=${Math.hypot(W.x, W.z - 3.0).toFixed(2)}`);
+  // (más de 30 cm: con los reflejos de caída el caminante frena su propia caída con los brazos y viaja menos)
+  ok('el caminante fue desplazado', Math.hypot(W.x, W.z - 3.0) > 0.3, `d=${Math.hypot(W.x, W.z - 3.0).toFixed(2)}`);
   run(w, 5);
   ok('a los 8 s los dos están de pie otra vez', W.upright && R.upright, `${W.upright} ${R.upright}`);
   ok('sin NaN', nanFree(w));

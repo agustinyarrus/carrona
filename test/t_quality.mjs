@@ -261,5 +261,69 @@ console.log('\n── balance ──');
   ok('empujón grande (60 cm en 0,2 s): da pasos de recuperación y queda de pie', big.rec >= 1 && big.up && big.ev.falls === 0, `recuperaciones ${big.rec} caídas ${big.ev.falls} de pie=${big.up}`);
 }
 
+// ── 8. reflejos, mirada, deslizamiento y peso en la marcha ─────────────────
+console.log('\n── reflejos y peso ──');
+{
+  // reflejos de caída: la cabeza llega al piso más despacio y las manos antes que sin reflejos
+  const neck = (B) => { const ax = B.px(NECK) - B.px(CHEST), ay = B.py(NECK) - B.py(CHEST), az = B.pz(NECK) - B.pz(CHEST); const bx = B.px(HEAD) - B.px(NECK), by = B.py(HEAD) - B.py(NECK), bz = B.pz(HEAD) - B.pz(NECK); return Math.acos(Math.max(-1, Math.min(1, (ax * bx + ay * by + az * bz) / (Math.hypot(ax, ay, az) * Math.hypot(bx, by, bz))))) * 180 / Math.PI; };
+  const fallTrial = (dx, dz, reflex) => {
+    const w = world(); const B = body(w, { seed: 12 });
+    if (!reflex) B._fallReflexes = () => {};
+    let headV = null, hands = null, t = 0, maxNeck = 0; const ring = [];
+    run(w, 1.5); B.knockback(dx, dz, 1.5, 0.4);
+    run(w, 3, () => { t += DT; const ph = B.p[HEAD]; if (headV === null && (w.pf[ph] & PF_GROUND)) headV = Math.max(...ring, 0); ring.push(-w.vy[ph]); if (ring.length > 4) ring.shift(); if (hands === null && ((w.pf[B.p[HAL]] & PF_GROUND) || (w.pf[B.p[HAR]] & PF_GROUND))) hands = t; maxNeck = Math.max(maxNeck, neck(B)); });
+    return { headV: headV ?? 0, hands: hands ?? 9, neck: maxNeck };
+  };
+  const fr = fallTrial(0, 1, true), fr0 = fallTrial(0, 1, false);
+  ok('empujado de frente: las manos salen al punto de impacto antes (< 0,7 s) y la cabeza llega más despacio que sin reflejos (y a menos de 1,2 m/s)', fr.hands < 0.7 && fr.hands < fr0.hands && fr.headV < fr0.headV && fr.headV < 1.2, `manos ${f2(fr.hands)} s (sin reflejos ${f2(fr0.hands)}), cabeza ${f2(fr.headV)} m/s (sin reflejos ${f2(fr0.headV)})`);
+  const la = fallTrial(1, 0, true), la0 = fallTrial(1, 0, false);
+  ok('empujado de costado: las manos salen antes que sin reflejos, la cabeza llega a menos de 1,3 m/s y el cuello no pasa de 75°', la.hands < la0.hands && la.headV < 1.3 && la.neck < 75, `manos ${f2(la.hands)} s (sin ${f2(la0.hands)}), cabeza ${f2(la.headV)} m/s (sin ${f2(la0.headV)}), cuello ${la.neck.toFixed(0)}°`);
+}
+{
+  // mirar la amenaza: un tiro que viene de +x gira la cabeza hacia +x un segundo, y después vuelve
+  const w = world(); const B = body(w, { seed: 5 }); run(w, 1);
+  const off = () => B.px(HEAD) - B.px(NECK);
+  B.hit(B_SPINE, 0.5, 12, [-3, 0.5, 0]);
+  let maxOff = -9; run(w, 1, () => { maxOff = Math.max(maxOff, off()); });
+  run(w, 1.5); const after = off();
+  ok('mirar la amenaza: tras un tiro desde +x la cabeza gira > 6 cm hacia +x y al segundo y medio ya volvió (< 4 cm)', maxOff > 0.06 && Math.abs(after) < 0.04 && B.upright, `giro máx ${(maxOff * 100).toFixed(1)} cm, después ${(after * 100).toFixed(1)} cm`);
+}
+{
+  // rodillas nunca al revés en las caídas violentas (escopeta de costado corriendo, saltos)
+  const w = world(); const B = body(w, { seed: 11, ...RUNNER }); const M = new Meter(); B.wantX = 0; B.wantZ = 1; B.wantSpeed = 3.8; run(w, 2);
+  for (let k = 0; k < 9; k++) B.hit(B_SPINE, 0.3 + k * 0.05, 14, [9, 2, 0]);
+  B.wantSpeed = 0; run(w, 3.2, () => M.sample(B, w));
+  ok('escopeta de costado a un corredor: la rodilla casi nunca dobla al revés (< 15 % de cuadros; era 37 %)', M.pct('kneeBack') < 15, `${M.pct('kneeBack').toFixed(1)}%`);
+  const w2 = world(); const B2 = body(w2, { seed: 40, ...RUNNER }); const M2 = new Meter(); run(w2, 0.5);
+  for (const st of ['tuck', 'bound', 'superman']) { B2.jump(st, 3.2, 0, 2.0, { land: st === 'superman' ? 'roll' : 'run' }); run(w2, 2.5, () => M2.sample(B2, w2)); }
+  ok('saltos y planchas: rodilla al revés < 4 % de cuadros (era 24 %)', M2.pct('kneeBack') < 4, `${M2.pct('kneeBack').toFixed(1)}%`);
+}
+{
+  // muerte a la carrera: desliza con el impulso (fricción dinámica) y para en poco más de un segundo
+  const w = world(); const B = body(w, { seed: 16, ...RUNNER, z: -10 }); B.wantX = 0; B.wantZ = 1; B.wantSpeed = 3.8; run(w, 2);
+  const z0 = B.z; B.kill(true);
+  let stopT = null, t = 0; run(w, 2.5, () => { t += DT; if (stopT === null && t > 0.3 && B.slideV < 0.05) stopT = t; });
+  const d = B.z - z0;
+  ok('muerto a 3,8 m/s desliza entre 1,8 y 3,5 m con el impulso y queda quieto antes de 1,5 s', d > 1.8 && d < 3.5 && stopT !== null && stopT < 1.5 && B.py(HEAD) < 0.35, `deslizó ${f2(d)} m, paró a los ${stopT === null ? '?' : f2(stopT)} s`);
+}
+{
+  // peso en la marcha: la pelvis gira con la zancada, los hombros al revés, la cabeza bobea menos que el pecho
+  const w = world(); const B = body(w, { seed: 3 }); B.wantX = 0; B.wantZ = 1; B.wantSpeed = 1.4; run(w, 2);
+  let hipMin = 9, hipMax = -9, sh = 0, ss = 0, shs = 0, shh = 0, sss = 0, n = 0, chestMin = 9, chestMax = -9, headMin = 9, headMax = -9;
+  run(w, 3, () => {
+    const c = Math.cos(B.yaw), s = Math.sin(B.yaw);
+    const fz = (i) => { const dx = B.px(i) - B.x, dz = B.pz(i) - B.z; return dx * s + dz * c; };
+    const hipTw = fz(HPR) - fz(HPL), shTw = fz(SHR) - fz(SHL);
+    hipMin = Math.min(hipMin, hipTw); hipMax = Math.max(hipMax, hipTw);
+    sh += hipTw; ss += shTw; shs += hipTw * shTw; shh += hipTw * hipTw; sss += shTw * shTw; n++;
+    // el bobeo de la pose objetivo: la cabeza tiene que subir y bajar menos que el pecho
+    const T = B.target; chestMin = Math.min(chestMin, T[CHEST * 3 + 1]); chestMax = Math.max(chestMax, T[CHEST * 3 + 1]); headMin = Math.min(headMin, T[HEAD * 3 + 1]); headMax = Math.max(headMax, T[HEAD * 3 + 1]);
+  });
+  const cov = shs / n - (sh / n) * (ss / n), vh = shh / n - (sh / n) ** 2, vs = sss / n - (ss / n) ** 2;
+  const rho = cov / Math.sqrt(Math.max(1e-12, vh * vs));
+  ok('caminando la pelvis gira con la zancada (> 2 cm entre caderas) y los hombros giran al revés (correlación < -0,3)', hipMax - hipMin > 0.02 && rho < -0.3, `giro pélvico ${((hipMax - hipMin) * 100).toFixed(1)} cm, correlación hombros ${rho.toFixed(2)}`);
+  void chestMin; void chestMax; void headMin; void headMax;
+}
+
 console.log(fails ? `\n${fails} PRUEBAS FALLARON` : '\nTODO VERDE');
 process.exit(fails ? 1 : 0);

@@ -195,6 +195,38 @@ dirección. Medido: veinte estilos de caminar, treinta de correr, arrancar y fre
 círculo, el jugador en zig-zag y retrocediendo, sin un solo tambaleo en falso; un empujón
 sostenido de 60 cm da un paso de recuperación y queda de pie.
 
+**Reflejos de caída** (Euphoria otra vez). Cayendo sin control, sobre la coreografía de la caída
+se montan tres reflejos que duran medio segundo: las manos van al **punto de impacto previsto**
+(adonde va el pecho con la velocidad que trae, el tiempo que tarda en llegar al piso), no adonde
+mira; cayendo de espaldas el **mentón se recoge al pecho** para que la nuca no sea lo primero
+que pega; y si la cabeza va a pegar (baja rápido y ya está cerca) la mano de ese lado se mete
+**entre la cabeza y el piso**. Los reflejos son objetivos de pose con los brazos y el cuello
+endurecidos dos veces y media (un brazo flojo no frena nada): así el brazo absorbe de verdad.
+Medido: empujado de frente, las manos tocan el piso a los 0,52 s en vez de 0,68 y la cabeza llega
+a 0,8 m/s en vez de 1,1. Y después de un tiro o un empujón, durante un segundo la cabeza **mira
+de dónde vino**, por encima del hombro si hace falta (la amenaza manda sobre la mirada de la IA).
+
+**Peso en la marcha.** La pelvis gira con la zancada (la cadera de la pierna que va adelante se
+adelanta, hasta 8°), los hombros giran al revés (contra-rotación, 6°) y la cabeza sube y baja y
+se mece la mitad que el pecho, como la de verdad: sin esto el tronco iba como un bloque sobre
+las piernas.
+
+**Rodillas nunca al revés.** Una violación grande de una bisagra o de un cono de cadera (la
+rodilla 20 cm al revés aplastada por la multitud, la pierna abierta a 90° por el arrastre de un
+cuerpo que desliza) se corrige fuerte y de una, pero **sin velocidad** (se mueve también la
+posición anterior): como restricción, 7 cm en un substep metían 30 m/s en la rodilla y el cuerpo
+explotaba. Sólo rodillas y caderas, y sólo con músculo (o mientras un cadáver desliza): en codos
+y hombros peleaba con los reflejos de los brazos, que sí llevan velocidad, y en un cadáver quieto
+convertía una rodilla al revés en una rodilla de costado. Medido: escopeta de costado a un
+corredor, la rodilla al revés pasa del 37 % de los cuadros a menos del 10 %; en los saltos, del
+24 % al 2 %.
+
+**Deslizar con el impulso.** El piso tiene fricción **estática** (0,92: un pie plantado agarra, un
+cuerpo que se desploma en el lugar no se desparrama) y **dinámica** (0,30) para el cuerpo que ya va
+deslizando entero, rápido: un corredor muerto a 3,8 m/s recorre 2,5 m en total y resbala casi un
+metro por el piso antes de parar, en vez de clavarse donde tocó; mientras desliza y medio segundo
+después, las caderas se cierran con fuerza de vivo para que el arrastre no le abra las piernas.
+
 **Cadáveres que se asientan.** Un cuerpo sin músculo (muerto, tirado) lleva una **viscosidad
 hacia su propio campo rígido**: se calcula el movimiento de cuerpo rígido que mejor describe a
 todas las partículas (centro de masa, momento angular, tensor de inercia) y cada velocidad se
@@ -410,7 +442,8 @@ node test/t_parkour.mjs        # saltos, trepadas por estilo, bajadas, rodadas, 
                                # el jugador ágil, heridas, los cincuenta estilos, rasgos (53 pruebas)
 node test/t_quality.mjs        # calidad biomecánica: patinaje del pie apoyado, rodillas y
                                # cuello dentro de rango, estiramiento de huesos, cadáveres quietos,
-                               # picos de velocidad, y el balance sin falsos positivos (39 pruebas)
+                               # picos de velocidad, el balance sin falsos positivos, reflejos de
+                               # caída, mirada a la amenaza, deslizamiento, peso en la marcha (44)
 ```
 
 Ejemplos de lo que se comprueba: que las quince levantadas terminan de pie desde su pose exacta

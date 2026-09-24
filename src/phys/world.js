@@ -101,7 +101,10 @@ export class PhysWorld {
     // cuerpo lanzado vuela como cuerpo, no como si estuviera bajo el agua.
     this.gravity = -16.0;
     this.substeps = 7;
-    this.frictionS = 0.92;
+    this.frictionS = 0.92;   // estática (positional): un pie plantado agarra
+    this.frictionD = 0.30;   // dinámica: lo que ya desliza a más de `frictionVt` resbala
+    this.frictionVt = 1.5;   // m/s
+    this._h = 1 / 420;
     this.airDrag = 0.10;
     this.maxSpeed = 90;
     this.maxDepen = 0.008;   // despenetración extra permitida por substep (m)
@@ -256,6 +259,7 @@ export class PhysWorld {
   step(dt) {
     const S = this.substeps;
     const h = dt / S;
+    this._h = h;
     const g = this.gravity;
 
     if (this._staticDirty) this.buildStaticIndex();
@@ -716,7 +720,7 @@ export class PhysWorld {
   _solveWorld() {
     const o = this._co || (this._co = { x: 0, y: 0, z: 0, kx: 0, ky: 0, kz: 0, hit: false, ground: false, gm: 0 });
     const px = this.px, py = this.py, pz = this.pz, qx = this.qx, qz = this.qz;
-    const muS = this.frictionS;
+    const muS = this.frictionS, muD = this.frictionD, vSl = this.frictionVt, pOwner = this.pOwner;
     for (let i = 0; i < this.pn; i++) {
       if (!(this.pf[i] & PF_ALIVE) || this.iw[i] === 0) continue;
       this._collidePoint(px[i], py[i], pz[i], this.pr[i], o);
@@ -728,7 +732,10 @@ export class PhysWorld {
         this.pf[i] |= PF_GROUND;
         const tx = x - qx[i], tz = z - qz[i];
         const tl = Math.sqrt(tx * tx + tz * tz);
-        if (tl > 1e-6) { const f = Math.min(1, muS * o.gm / tl); x -= tx * f; z -= tz * f; }
+        // fricción estática (un pie plantado agarra, un cuerpo que se desploma no se
+        // desparrama); dinámica, menor, si el CUERPO entero ya va deslizando rápido
+        // (un cuerpo que cae corriendo resbala por el piso en vez de clavarse donde tocó)
+        if (tl > 1e-6) { const own = pOwner[i]; const mu = own && own.slideV > vSl ? muD : muS; const f = Math.min(1, mu * o.gm / tl); x -= tx * f; z -= tz * f; }
       }
       px[i] = x; py[i] = o.y; pz[i] = z;
     }
@@ -743,7 +750,7 @@ export class PhysWorld {
   _solveBoneWorld() {
     const o = this._co2 || (this._co2 = { x: 0, y: 0, z: 0, kx: 0, ky: 0, kz: 0, hit: false, ground: false, gm: 0 });
     const px = this.px, py = this.py, pz = this.pz, qx = this.qx, qz = this.qz;
-    const iw = this.iw, pf = this.pf, muS = this.frictionS;
+    const iw = this.iw, pf = this.pf, muS = this.frictionS, muD = this.frictionD, vSl = this.frictionVt;
     for (let i = 0; i < this.bn; i++) {
       if (!this.balive[i]) continue;
       const body = this.bbody[i];
@@ -759,7 +766,7 @@ export class PhysWorld {
       if (o.ground) {
         const tx = (mx + cx) - (qx[a] + qx[b]) * 0.5, tz = (mz + cz) - (qz[a] + qz[b]) * 0.5;
         const tl = Math.sqrt(tx * tx + tz * tz);
-        if (tl > 1e-6) { const f = Math.min(1, muS * o.gm / tl); cx -= tx * f; cz -= tz * f; }
+        if (tl > 1e-6) { const mu = body && body.slideV > vSl ? muD : muS; const f = Math.min(1, mu * o.gm / tl); cx -= tx * f; cz -= tz * f; }
       }
       // mover cada extremo el doble de su fracción de masa: el punto medio se
       // desplaza exactamente la corrección
