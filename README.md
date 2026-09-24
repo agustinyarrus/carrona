@@ -2,15 +2,18 @@
 
 # CARRONA
 
-**Zombis top-down en una oficina de noche. Todos los cuerpos son ragdoll activo, todo el tiempo.**
+**Zombis top-down de noche en cinco lugares. Todos los cuerpos son ragdoll activo, todo el tiempo.**
 
 Motor de física propio, músculos que son controladores PD, marcha por cinemática inversa y una
 biblioteca de movimientos físicos: veinticinco maneras de levantarse, veintidós de caer, seis de
 morir, trece de saltar, seis de trepar, veintiún sacudones por tiro, veinte ataques, once tics y
 seiscientas combinaciones de estilo de marcha. Uno de cada cinco zombis pega saltitos; dos de
 cada diez hacen parkour.
-Un `index.html`, módulos ES, Three.js vendorizado. Cero dependencias que instalar, cero archivos
-de textura o de sonido: todo es procedural.
+Cinco lugares (la oficina, el estacionamiento, el supermercado, la estación, el hospital), una
+campaña de ocho misiones con progreso guardado, modo infinito, menú y opciones completas, en
+castellano y en inglés. Un `index.html`, módulos ES, Three.js vendorizado. Cero dependencias que
+instalar, cero archivos de textura o de sonido: todo es procedural. Para Windows hay instalador y
+zip portable sin dependencias; en el navegador se instala como app.
 
 ![JavaScript](https://img.shields.io/badge/JavaScript-ES2022-F7DF1E?logo=javascript&logoColor=black)
 ![Three.js](https://img.shields.io/badge/Three.js-r160-000000?logo=three.js&logoColor=white)
@@ -24,7 +27,7 @@ de textura o de sonido: todo es procedural.
 
 ## Qué es
 
-Un shooter de oleadas visto desde arriba. La gracia no está en las armas sino en los cuerpos:
+Un shooter de oleadas y misiones visto desde arriba. La gracia no está en las armas sino en los cuerpos:
 no hay ni un solo clip de animación en el proyecto. Cada zombi y el jugador son un esqueleto
 de partículas que la física mueve, y lo único que cambia entre "camina", "corre", "se estrella
 contra la pared" y "muere" es cuánta fuerza hace cada músculo para llegar a su pose. Un tiro
@@ -43,11 +46,162 @@ y después se levanta: rodando y empujando con los brazos, o de un salto si tien
 
 ## Jugar
 
-Doble clic en **`Jugar CARRONA.bat`**: levanta un servidor local en el puerto 8765 y abre el
-navegador. `Jugar CARRONA (sin consola).vbs` hace lo mismo sin ventana negra. Hace falta
-Python 3 en el PATH y Chrome o Edge. Los módulos ES no cargan desde `file://`, por eso el servidor.
+Hay tres caminos; en los tres el juego corre en `http://localhost:8765/` (los módulos ES no
+cargan desde `file://`, por eso siempre hay un servidor local atrás; los récords y ajustes viven
+en el `localStorage` de ese origen).
 
-| Tecla | Acción |
+**1. Instalador (Windows 10/11, sin Python ni nada).** Bajá `CARRONA-Setup-x.y.z.exe` de
+[Releases](../../releases), ejecutalo y listo: instala por usuario (sin pedir administrador) en
+`%LOCALAPPDATA%\Programs\CARRONA` y deja un acceso directo **CARRONA** en el menú Inicio y, si
+querés, en el escritorio. El acceso directo levanta un servidor local y abre el juego en una
+ventana propia (modo app de Edge o Chrome). Windows va a mostrar el aviso de SmartScreen porque
+el instalador no está firmado: *Más información → Ejecutar de todas formas*.
+
+**2. Zip portable.** Bajá `CARRONA-portable-x.y.z.zip`, extraelo donde quieras y hacé doble clic
+en **`Jugar CARRONA.bat`**. Tampoco necesita nada instalado. Si al extraerlo Windows marcó los
+archivos como bajados de internet (Mark-of-the-Web), el `.bat` puede mostrar un aviso de
+SmartScreen: *Más información → Ejecutar de todas formas*; o, antes de extraer, botón derecho
+sobre el zip → *Propiedades* → *Desbloquear*.
+
+**3. Desde el código.** Con Python 3: `npm run serve` o `python serve.py` y abrí
+`http://localhost:8765/` (`python serve.py 8766 --no-open --dir dist` para otro puerto, sin
+abrir el navegador, o sirviendo otra carpeta). También podés usar el lanzador de Windows desde
+el repo: `Jugar CARRONA.bat`.
+
+### Instalar como app (PWA)
+
+Cuando el navegador ofrece instalar el juego, en el menú aparece un botón **INSTALAR**. Lo
+ofrece sólo si el juego está servido desde el build (`dist/`, el instalador o el zip): ahí
+`index.html` trae una marca de versión y se registra el *service worker*, que precachea todos
+los archivos del juego. Instalado, CARRONA queda en el menú Inicio como cualquier app, abre
+en su propia ventana y **corre sin servidor** hasta que borres los datos del sitio en el
+navegador. Cada versión nueva del build reemplaza la caché completa y borra la anterior.
+Desde el repo (`serve.py`) el service worker no se registra nunca, así el código de desarrollo
+no queda cacheado.
+
+### Cómo funciona el lanzador
+
+`launcher/carrona.ps1` es un script de PowerShell 5.1 (el que viene con Windows 10/11; no
+necesita PowerShell 7) que:
+
+1. Pregunta `http://localhost:8765/__carrona`: si ya hay un CARRONA sirviendo (otro doble clic,
+   o `serve.py` de desarrollo), sólo abre el navegador y termina.
+2. Levanta `System.Net.HttpListener` en `http://localhost:8765/` y sirve la carpeta del juego
+   con los MIME correctos (`text/javascript` para los módulos, `application/manifest+json`
+   para el manifest), sin salir nunca de esa carpeta. Si el puerto está ocupado prueba
+   8766 a 8775 (ojo: en otro puerto los récords guardados no se ven, son por origen).
+3. Busca Edge o Chrome en el registro (*App Paths*) y lo abre en modo app
+   (`--app=`, sin barra de direcciones) con un perfil propio en `%LOCALAPPDATA%\CARRONA\profile`.
+   Sin ese perfil el navegador delega en la instancia ya abierta y no hay manera de saber
+   cuándo se cerró la ventana.
+4. Cuando la ventana se cierra, apaga el servidor y termina. Si no hay Edge ni Chrome, abre el
+   navegador predeterminado en una pestaña y apaga el servidor cuando el juego avisa que se
+   cerró (`/__bye`) o cuando pasan 90 s sin pedidos.
+
+`Jugar CARRONA.bat` y los accesos directos del instalador lo invocan con
+`powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File`, así no depende
+de la política de ejecución del equipo. Registra lo que hace en
+`%LOCALAPPDATA%\CARRONA\launcher.log`.
+
+Limitaciones conocidas:
+
+- **Puerto ocupado**: si 8765 lo usa otro programa, cae a 8766..8775 y los datos guardados
+  quedan en otro origen (se ven como récords en cero hasta que se libere el puerto).
+- **Directiva de grupo de PowerShell**: `-ExecutionPolicy Bypass` no puede saltarse una
+  política impuesta por GPO (`MachinePolicy`/`UserPolicy`). En ese caso queda el camino 3
+  (`serve.py`).
+- **Sin navegador Chromium**: Firefox u otro predeterminado abre el juego en una pestaña
+  común, no en ventana app.
+- **SmartScreen**: ni el instalador ni el `.bat` están firmados; la primera vez Windows pide
+  confirmación.
+- Al arrancar, la ventana negra de la consola aparece un instante: es `powershell.exe`
+  arrancando antes de ocultarse.
+
+## El juego
+
+### Los lugares
+
+Cinco lugarcitos, cada uno una losa que flota en la negrura con un pedazo de edificio encima,
+armados con el mismo DSL (`src/game/level.js`) y registrados en `src/game/maps.js` con su
+semilla, su grilla de navegación, su clima (paleta, luna, bloom, niebla) y sus textos.
+
+| Lugar | Qué hay | Puertas |
+|---|---|---|
+| **La oficina** | hall, oficina abierta, dos salas de reuniones, pasillo, cubículos, cocina | oeste, norte, sur, este |
+| **El estacionamiento** | subsuelo con columnas, autos, cabina de cobro, barreras, charcos, rampa, sala de máquinas; tubos verdosos que parpadean y niebla | rampa, escalera, montacargas, sur |
+| **El supermercado** | góndolas en filas, heladeras con luz, cajas registradoras, frutas y verduras, depósito con estanterías, cartel de OFERTA | entrada, depósito, carga, este |
+| **La estación** | andén largo con vías y un vagón detenido (la salida es su puerta), molinetes, boletería, columnas de azulejo, bancos, kioscos; luces de sodio y niebla | dos túneles, escalera, boletería |
+| **El hospital** | pasillo central, habitaciones con camas y cortinas, monitores, guardia, camillas, quirófano, sala de espera con expendedora; luces frías que parpadean y una roja de emergencia | guardia, ambulancias, ascensor, terapia |
+
+<div align="center">
+
+| ![estacionamiento](docs/estacionamiento.jpg) | ![supermercado](docs/super.jpg) |
+|:--:|:--:|
+| el estacionamiento: bidones entre los autos | el supermercado: la lista de compras |
+
+</div>
+
+Cada mapa tiene puntos con nombre (`L.point`): la salida y entre cuatro y seis lugares donde
+las misiones dejan las cosas para juntar. Cambiar de mapa tira abajo el anterior por completo
+(mallas, luces, estáticos, cuerpos, grilla y horda) y arma el nuevo; el menú queda sobre el
+último lugar jugado, con zombis paseando.
+
+### Campaña y modo infinito
+
+Cinco lugares y ocho misiones en orden: cada una se abre al cumplir la anterior, y el progreso
+(cumplidas, intentos, mejor tiempo, récords del infinito) queda guardado en el navegador.
+
+| # | Misión | Lugar | Qué hay que hacer |
+|---|---|---|---|
+| 1 | Horas extra | la oficina | sobrevivir 3 oleadas |
+| 2 | El subsuelo | el estacionamiento | juntar 3 bidones de nafta entre los autos y subir por la rampa |
+| 3 | Lista de compras | el supermercado | juntar 4 bolsas de comida, aguantar un minuto y salir |
+| 4 | Último tren | la estación | 4 oleadas pesadas (brutos desde la segunda) y subirse al vagón |
+| 5 | Turno noche | el hospital | 60 bajas, 3 cajas de remedios y salir por la guardia |
+| 6 | De vuelta a la oficina | la oficina | 5 oleadas pesadas con escopeta y fusil desde el arranque |
+| 7 | La estampida | el estacionamiento | 3 minutos de estampidas por todas las puertas y la rampa |
+| 8 | El fin del viaje | la estación | 6 oleadas, 30 bajas más y el último vagón |
+
+Los objetivos son de cinco tipos y van en orden: sobrevivir N oleadas, matar N, aguantar T
+segundos, juntar N cosas repartidas por el mapa (aparecen con una columna de luz y un marcador
+en el HUD que apunta a la más cercana) y llegar a un punto (un faro en el mundo y el marcador
+con la distancia). Cada mapa trae su configuración de oleadas: la clásica, una liviana para las
+misiones donde lo importante es moverse, y una pesada con brutos desde la segunda oleada y
+estampidas seguidas. El **modo infinito** son las oleadas sin fin de siempre, en cualquier lugar
+donde ya hayas cumplido una misión (la oficina está abierta desde el principio); guarda la mejor
+oleada y las bajas por mapa.
+
+### Menú y opciones
+
+<div align="center">
+
+| ![menú](docs/menu.jpg) | ![campaña](docs/campana.jpg) |
+|:--:|:--:|
+| el menú sobre el último lugar jugado | la campaña: las misiones se abren de a una |
+
+</div>
+
+El menú es de botones: CONTINUAR (la próxima misión pendiente), CAMPAÑA, INFINITO, OPCIONES,
+PANTALLA COMPLETA y, cuando el navegador lo ofrece, INSTALAR. Un clic sobre una pantalla nunca
+llega al juego: no hay forma de arrancar una partida sin querer. Esc cierra la pantalla que esté
+arriba. Al morir: reintentar o volver al menú; al cumplir una misión: la siguiente, repetir o el
+menú. La pausa congela la simulación y el audio, y también se pausa sola si la pestaña se va atrás.
+
+Las opciones se generan desde un registro declarativo (`src/game/options.js`): cada opción se
+describe una vez (clave, grupo, tipo, rango, valor por defecto, cómo se aplica) y de ahí salen la
+pantalla, la validación de lo guardado y la persistencia en `carrona.settings`.
+
+| Grupo | Opciones |
+|---|---|
+| video | pantalla completa, calidad (bajo / medio / alto), bajar la calidad sola si no llega a 45 fps, sombras, bloom, mostrar fps |
+| audio | volumen general, efectos, ambiente y música (tres buses de Web Audio) |
+| juego | sacudida de cámara, distancia e inclinación de cámara, adelanto hacia el mouse, idioma (castellano / inglés) |
+| controles | todas las acciones con teclas configurables (clic en la tecla, apretar la nueva; esc cancela), teclas por defecto |
+
+Los textos viven en `src/core/i18n.js` en los dos idiomas; el idioma cambia en caliente, sin
+recargar.
+
+| Tecla (por defecto) | Acción |
 |---|---|
 | WASD / flechas | moverse (relativo a la cámara) |
 | Shift | correr (el arma baja, el cuerpo se inclina al arrancar) |
@@ -59,7 +213,7 @@ Python 3 en el PATH y Chrome o Edge. Los módulos ES no cargan desde `file://`, 
 | Q / E | girar la cámara 45° |
 | rueda | acercar o alejar la cámara |
 | F | linterna |
-| Esc | pausa: calidad gráfica, volumen, sacudida de cámara |
+| Esc | pausa |
 | F3 | panel de rendimiento |
 
 Armas: pistola (munición infinita), subfusil desde la oleada 2, escopeta desde la 3, fusil desde
@@ -69,6 +223,28 @@ y sin una pierna el zombi se arrastra. Entre oleadas caen munición, botiquines 
 El jugador es **ágil**: contra una pared a toda velocidad atrapa con las manos y rebota (no se
 desarma), se lleva puesto a un zombi con el hombro sin caerse, y tirado en el piso no espera:
 apretando una dirección rueda de costado o gatea hacia allá y se levanta en la carrera.
+
+## Instalador y distribución
+
+### Build y release
+
+```
+node tools/icons.mjs        # regenera icons/ (PNG 192/512/32, maskable y carrona.ico), determinista
+node tools/build.mjs        # arma dist/: juego + lanzador + íconos + manifest, inyecta la meta de
+                            # versión en index.html, genera sw.js con el precache, escribe
+                            # installer/version.iss y el zip CARRONA-portable-x.y.z.zip
+node test/t_build.mjs       # prueba el build (precache exacto, zip, lanzador, íconos, serve.py)
+```
+
+El instalador se compila con [Inno Setup 6](https://jrsoftware.org/isinfo.php):
+`ISCC.exe installer\carrona.iss` deja `dist\CARRONA-Setup-x.y.z.exe`. La versión sale de
+`package.json` (`src/core/version.js` tiene que coincidir, `t_build` lo verifica).
+
+Para publicar: subí la versión en `package.json` y `src/core/version.js`, y pusheá un tag
+`vX.Y.Z`. El workflow `.github/workflows/release.yml` corre en `windows-latest`: genera los
+íconos, corre las pruebas y el build, compila el instalador con el Inno Setup que trae el
+runner y crea el release de GitHub con el `.exe` y el zip adjuntos. Se puede lanzar a mano
+(*workflow_dispatch*) para probar sin publicar: deja los archivos como artefactos.
 
 ## El core
 
@@ -398,24 +574,39 @@ No hay un solo archivo de sonido.
 ## Estructura
 
 ```
-index.html                 HUD, menús, importmap
-src/main.js                arranque: canvas, renderer, audio, bucle
-src/core/                  util (rng, clamp, ángulos), input
+index.html                 HUD, pantallas (menú, campaña, infinito, opciones, pausa, muerte, victoria), importmap
+src/main.js                arranque, la UI (pantallas, opciones generadas, marcador) y el bucle
+src/core/                  util (rng, clamp, ángulos), input con acciones configurables, i18n (es/en),
+                           versión, pwa (instalación como app, service worker)
 src/phys/world.js          motor XPBD
 src/phys/skeleton.js       índices de partícula y pose de referencia
 src/phys/ragdoll.js        ragdoll activo: músculos PD, raíz virtual, marcha IK, estados, reacciones
 src/phys/moves.js          poses, caídas, levantadas, muertes, sacudones, ataques, tics, estilos
-src/game/level.js          constructor de lugares y la oficina (hall, oficina abierta, dos salas,
-                           pasillo, cubículos, cocina; 4 puertas)
+src/game/level.js          el DSL de lugares (paredes, pisos, muebles, luces, puntos con nombre) y los
+                           cinco lugares: oficina, estacionamiento, supermercado, estación, hospital
+src/game/maps.js           registro de mapas: constructor, semilla, grilla, clima, textos
+src/game/mission.js        la campaña (ocho misiones), las configuraciones de oleadas y el manager de objetivos
+src/game/progress.js       progreso guardado: misiones cumplidas, tiempos, intentos, récords del infinito
+src/game/options.js        registro declarativo de opciones y teclas; validación y persistencia
 src/game/nav.js            campo de flujo
 src/game/zombie.js         IA de la horda
 src/game/props.js          props rígidos que duermen
 src/game/weapons.js        armas e hitscan
 src/game/player.js         jugador
-src/game/game.js           oleadas, estampidas, dormidos, pickups, disparo, cadáveres, HUD
+src/game/game.js           estados, mapas, partidas, oleadas parametrizadas, estampidas, dormidos,
+                           pickups y objetivos, disparo, cadáveres, HUD, pausa, ajustes
 src/render/                renderer, materiales, cuerpos instanciados, props, FX, modelos, shaders
 src/audio/audio.js         síntesis
 vendor/three/              Three.js r160 y los addons de postprocesado que se usan
+launcher/carrona.ps1       lanzador de Windows: HttpListener en localhost:8765 + navegador en modo app
+Jugar CARRONA.bat          doble clic → launcher\carrona.ps1 (PowerShell 5.1, sin Python)
+manifest.webmanifest       nombre, íconos, pantalla completa, orientación apaisada
+sw.js                      service worker: precache versionado (los marcadores los llena el build)
+icons/                     íconos generados por tools/icons.mjs (PNG y carrona.ico)
+tools/                     icons.mjs (íconos), build.mjs (dist + zip + version.iss), zip.mjs (ZIP mínimo)
+installer/carrona.iss      instalador de Inno Setup 6 (version.iss lo genera el build)
+.github/workflows/         release.yml: build + instalador + release al pushear un tag vX.Y.Z
+serve.py                   servidor de desarrollo (localhost:8765, --dir, --no-open)
 test/                      suites en Node y arneses de navegador
 docs/                      capturas
 ```
@@ -426,7 +617,7 @@ Las suites corren en Node sin navegador y miden comportamiento físico real: dis
 tiempos, velocidades.
 
 ```
-npm test                       # las doce suites
+npm test                       # las diecisiete suites
 node test/t_world.mjs          # motor: estabilidad, colisiones, expulsión suave, rendimiento
 node test/t_ragdoll.mjs        # ragdoll: de pie, marcha a 1.4 m/s, muerte, desmembrado, 40 cuerpos
 node test/t_nav.mjs            # campo de flujo, muebles trepables
@@ -444,6 +635,13 @@ node test/t_quality.mjs        # calidad biomecánica: patinaje del pie apoyado,
                                # cuello dentro de rango, estiramiento de huesos, cadáveres quietos,
                                # picos de velocidad, el balance sin falsos positivos, reflejos de
                                # caída, mirada a la amenaza, deslizamiento, peso en la marcha (44)
+node test/t_maps.mjs           # los cinco lugares construidos en Node: playerStart, puertas y puntos
+                               # alcanzables, conectividad, presupuestos de dibujo, luces y física
+node test/t_mission.mjs        # el manager de objetivos con un juego de mentira, las oleadas, y la
+                               # campaña contra los mapas reales (cada punto que pide existe y se llega)
+node test/t_progress.mjs       # progreso: desbloqueos, récords, guardado roto o viejo
+node test/t_options.mjs        # registro de opciones, ajustes viejos, teclas configurables, input, i18n
+node test/t_build.mjs          # el build: dist, precache exacto, zip, lanzador, íconos, serve.py, CI
 ```
 
 Ejemplos de lo que se comprueba: que las quince levantadas terminan de pie desde su pose exacta
@@ -454,6 +652,10 @@ girar; que diez corredores con diez estilos corren todos a más de 3 m/s sin cae
 brazos a alturas distintas; que un caminante alertado corre a más de 2.3 m/s; que un corredor
 dormido en el piso se levanta y llega.
 
+Las suites de mapas, misiones y opciones cargan Three.js en Node con un hook de resolución
+(`test/_three_hooks.mjs`) y un stub de materiales: no hace falta navegador para construir un lugar
+entero y correr el campo de flujo sobre él.
+
 Los umbrales de rendimiento se miden con la CPU libre: con el juego corriendo en Chrome al
 mismo tiempo fallan por contención, no por el código. Los límites articulares, la pasada rígida,
 la autocolisión, el balance y los pies plantados cuestan un 15 % más por cuerpo de pie (40
@@ -463,7 +665,7 @@ lo contemplan.
 Arneses de navegador (Chrome con puerto de depuración):
 
 ```
-node test/browser_drive.mjs    # abre Chrome, juega solo y saca capturas a shots/
+node test/browser_drive.mjs    # abre Chrome, juega solo (infinito en la oficina) y saca capturas a shots/
 node test/browser_probe.mjs --all --runners --hit --player   # fps por calidad, corredores, tiros
 ```
 

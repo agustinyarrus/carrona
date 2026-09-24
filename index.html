@@ -4,10 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CARRONA</title>
-<link rel="icon" href="data:,">
+<meta name="theme-color" content="#06070a">
+<link rel="icon" href="./icons/favicon-32.png" type="image/png">
+<link rel="apple-touch-icon" href="./icons/icon-192.png">
+<link rel="manifest" href="./manifest.webmanifest">
 <style>
   :root {
-    --fg: #e6e3dc; --dim: #8e8b85; --acc: #ffd24a; --red: #ff4a4a; --bg: #06070a;
+    --fg: #e6e3dc; --dim: #8e8b85; --acc: #ffd24a; --red: #ff4a4a; --bg: #06070a; --line: #2a2d36;
     --font: 'Cascadia Code', 'Cascadia Mono', 'Consolas', ui-monospace, monospace;
   }
   * { box-sizing: border-box; }
@@ -19,31 +22,70 @@
   .screen.on { display: flex; }
   #loading { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: var(--bg); z-index: 50; letter-spacing: .5em; color: var(--dim); transition: opacity .6s; }
   #loading.off { opacity: 0; pointer-events: none; }
+  button { font: inherit; }
+
+  /* ── botones y listas ── */
+  .btn { display: block; min-width: 300px; margin: 0; padding: 11px 22px; background: rgba(10,11,16,.55); color: var(--fg); border: 1px solid var(--line); letter-spacing: .34em; font-size: 13px; font-weight: 300; cursor: pointer; text-align: center; transition: border-color .15s, color .15s, background .15s; }
+  .btn:hover, .btn:focus-visible { border-color: var(--acc); color: var(--acc); outline: none; background: rgba(255,210,74,.06); }
+  .btn.primary { border-color: rgba(255,210,74,.55); color: var(--acc); }
+  .btn.small { min-width: 0; padding: 7px 14px; font-size: 11px; letter-spacing: .22em; }
+  .btn[disabled] { opacity: .35; cursor: default; }
+  .btn[disabled]:hover { border-color: var(--line); color: var(--fg); background: rgba(10,11,16,.55); }
+  .btn.hidden, .hidden { display: none !important; }
+  .stack { display: flex; flex-direction: column; gap: 9px; margin-top: 34px; align-items: stretch; }
+  .row { display: flex; gap: 12px; justify-content: center; margin-top: 26px; flex-wrap: wrap; }
+  .list { display: flex; flex-direction: column; gap: 8px; margin-top: 26px; max-height: 52vh; overflow: auto; padding: 4px; width: min(720px, 92vw); scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+  .item { display: grid; grid-template-columns: 34px 1fr auto; gap: 16px; align-items: center; text-align: left; padding: 12px 18px; background: rgba(10,11,16,.55); border: 1px solid var(--line); color: var(--fg); cursor: pointer; letter-spacing: .12em; font-size: 12px; transition: border-color .15s, background .15s; }
+  .item:hover, .item:focus-visible { border-color: var(--acc); outline: none; background: rgba(255,210,74,.06); }
+  .item.locked { opacity: .4; cursor: default; }
+  .item.locked:hover { border-color: var(--line); background: rgba(10,11,16,.55); }
+  .item .num { color: var(--acc); font-size: 18px; letter-spacing: 0; text-align: center; }
+  .item.done .num { color: #7ad04a; }
+  .item .name { letter-spacing: .3em; font-size: 13px; color: var(--fg); }
+  .item .brief { color: var(--dim); margin-top: 5px; letter-spacing: .08em; line-height: 1.5; }
+  .item .status { color: var(--dim); text-align: right; letter-spacing: .18em; font-size: 11px; white-space: nowrap; }
+  .item.done .status { color: #7ad04a; }
 
   /* ── menú ── */
   #menu { background: linear-gradient(180deg, rgba(6,7,10,.35), rgba(6,7,10,.75)); }
   .title { font-size: clamp(56px, 11vw, 168px); font-weight: 200; letter-spacing: .42em; margin-left: .42em; line-height: 1; color: #f2efe8; text-shadow: 0 0 40px rgba(255,210,74,.12); }
+  .title.mid { font-size: clamp(34px, 6vw, 84px); }
   .sub { color: var(--dim); letter-spacing: .34em; margin: 14px 0 0 .34em; font-size: clamp(11px, 1.1vw, 15px); }
-  .keys { margin-top: 46px; display: grid; grid-template-columns: auto auto; gap: 8px 28px; text-align: left; color: var(--dim); font-size: 13px; letter-spacing: .12em; }
+  .keys { margin-top: 30px; display: grid; grid-template-columns: auto auto; gap: 6px 24px; text-align: left; color: var(--dim); font-size: 12px; letter-spacing: .12em; }
   .keys b { color: var(--fg); font-weight: 400; }
-  .go { margin-top: 44px; letter-spacing: .5em; margin-left: .5em; color: var(--acc); animation: blink 1.6s ease-in-out infinite; font-size: 14px; }
-  #best, #dbest { margin-top: 18px; color: var(--dim); letter-spacing: .2em; font-size: 12px; }
+  #best, #dbest, #wbest, #progress-line { margin-top: 14px; color: var(--dim); letter-spacing: .2em; font-size: 12px; }
+  #version { position: fixed; right: 18px; bottom: 14px; color: #3a3c44; letter-spacing: .2em; font-size: 11px; }
   @keyframes blink { 0%, 100% { opacity: .35 } 50% { opacity: 1 } }
 
-  /* ── muerte ── */
+  /* ── muerte y victoria ── */
   #death { background: radial-gradient(ellipse at center, rgba(40,4,6,.55), rgba(6,7,10,.9)); }
   #death .title { color: #ff5a5a; text-shadow: 0 0 60px rgba(255,60,60,.25); }
-  #dstats { display: flex; gap: 42px; margin-top: 40px; }
-  #dstats div { display: flex; flex-direction: column; align-items: center; }
-  #dstats b { font-weight: 300; font-size: 38px; color: #f2efe8; }
-  #dstats span { color: var(--dim); letter-spacing: .25em; font-size: 11px; margin-top: 6px; }
+  #win { background: radial-gradient(ellipse at center, rgba(40,34,6,.5), rgba(6,7,10,.9)); }
+  #win .title { color: var(--acc); text-shadow: 0 0 60px rgba(255,210,74,.25); }
+  .stats { display: flex; gap: 42px; margin-top: 36px; flex-wrap: wrap; justify-content: center; }
+  .stats div { display: flex; flex-direction: column; align-items: center; }
+  .stats b { font-weight: 300; font-size: 38px; color: #f2efe8; }
+  .stats span { color: var(--dim); letter-spacing: .25em; font-size: 11px; margin-top: 6px; }
 
-  /* ── pausa ── */
+  /* ── pausa, campaña, infinito ── */
   #pause { background: rgba(6,7,10,.72); }
-  .opts { display: grid; grid-template-columns: auto auto; gap: 18px 30px; align-items: center; margin-top: 30px; text-align: left; letter-spacing: .18em; font-size: 13px; color: var(--dim); }
-  .opts select, .opts input { font-family: var(--font); background: #101218; color: var(--fg); border: 1px solid #2a2d36; padding: 6px 10px; letter-spacing: .1em; }
-  .opts input[type=range] { width: 200px; accent-color: var(--acc); }
-  .hint { color: var(--dim); margin-top: 30px; letter-spacing: .3em; font-size: 12px; }
+  #campaign, #infinite { background: linear-gradient(180deg, rgba(6,7,10,.7), rgba(6,7,10,.88)); }
+  .hint { color: var(--dim); margin-top: 26px; letter-spacing: .3em; font-size: 12px; }
+
+  /* ── opciones ── */
+  #options { background: rgba(6,7,10,.86); }
+  #opts { width: min(760px, 94vw); max-height: 62vh; overflow: auto; margin-top: 18px; padding: 0 10px; text-align: left; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+  .ogroup { margin-top: 22px; }
+  .ogroup h3 { margin: 0 0 10px; font-weight: 300; letter-spacing: .4em; font-size: 12px; color: var(--acc); }
+  .orow { display: grid; grid-template-columns: 1fr auto; gap: 10px 22px; align-items: center; padding: 7px 0; border-bottom: 1px solid rgba(42,45,54,.6); letter-spacing: .14em; font-size: 12px; color: var(--dim); }
+  .orow .ctl { display: flex; align-items: center; gap: 10px; justify-content: flex-end; min-width: 240px; }
+  .orow select, .orow input[type=range] { font-family: var(--font); background: #101218; color: var(--fg); border: 1px solid var(--line); padding: 6px 10px; letter-spacing: .1em; }
+  .orow input[type=range] { width: 190px; accent-color: var(--acc); padding: 0; border: none; background: transparent; }
+  .orow .val { color: var(--fg); min-width: 46px; text-align: right; letter-spacing: 0; }
+  .orow .btn.small { min-width: 120px; }
+  .orow .btn.key { min-width: 150px; letter-spacing: .12em; }
+  .orow .btn.key.waiting { color: var(--acc); border-color: var(--acc); animation: blink 1s ease-in-out infinite; }
+  .okeys-hint { color: var(--dim); font-size: 11px; letter-spacing: .12em; margin: 4px 0 8px; }
 
   /* ── HUD ── */
   #hud { display: none; }
@@ -54,6 +96,10 @@
   #hptxt { position: absolute; right: -40px; top: -8px; color: var(--fg); font-size: 14px; letter-spacing: 0; }
   #wave { color: var(--fg); font-size: 15px; letter-spacing: .36em; }
   #kills, #left { margin-top: 6px; }
+  #objective { margin-top: 14px; color: var(--acc); letter-spacing: .18em; font-size: 12px; max-width: 360px; line-height: 1.5; }
+  #objective.off { display: none; }
+  #objective small { color: var(--dim); display: block; letter-spacing: .3em; font-size: 10px; margin-bottom: 2px; }
+  #objective .prog { color: var(--fg); margin-left: 8px; }
   .br { position: absolute; right: 34px; bottom: 30px; text-align: right; letter-spacing: .22em; font-size: 12px; color: var(--dim); }
   #weapon { color: var(--fg); font-size: 15px; letter-spacing: .36em; }
   #ammo { font-size: 30px; margin-top: 4px; letter-spacing: .05em; color: var(--dim); }
@@ -61,13 +107,17 @@
   .rlwrap { width: 180px; height: 3px; background: rgba(255,255,255,.08); margin: 8px 0 0 auto; opacity: 0; transition: opacity .2s; }
   #reload { height: 100%; width: 0; background: var(--acc); }
   #slots { margin-top: 10px; display: flex; gap: 10px; justify-content: flex-end; }
-  #slots span { width: 26px; height: 26px; border: 1px solid #2a2d36; display: inline-flex; align-items: center; justify-content: center; color: var(--dim); font-size: 12px; letter-spacing: 0; }
+  #slots span { width: 26px; height: 26px; border: 1px solid var(--line); display: inline-flex; align-items: center; justify-content: center; color: var(--dim); font-size: 12px; letter-spacing: 0; }
   #slots span.cur { border-color: var(--acc); color: var(--acc); }
   #flash { margin-top: 10px; letter-spacing: .3em; font-size: 11px; color: var(--acc); }
   #flash.off { color: #3a3c44; }
   #crosshair { position: fixed; left: 0; top: 0; width: 26px; height: 26px; border: 1px solid rgba(255,255,255,.75); border-radius: 50%; pointer-events: none; display: none; box-shadow: 0 0 0 1px rgba(0,0,0,.35); }
   #crosshair::after { content: ''; position: absolute; left: 50%; top: 50%; width: 3px; height: 3px; margin: -1.5px; background: #fff; border-radius: 50%; }
   body.ingame #crosshair { display: block; }
+  #marker { position: absolute; left: 0; top: 0; display: none; pointer-events: none; transform: translate(-50%, -50%); text-align: center; }
+  #marker.on { display: block; }
+  #marker .dia { width: 14px; height: 14px; margin: 0 auto; border: 2px solid var(--acc); transform: rotate(45deg); box-shadow: 0 0 12px rgba(255,210,74,.5), inset 0 0 6px rgba(255,210,74,.4); }
+  #marker .txt { margin-top: 6px; color: var(--acc); font-size: 11px; letter-spacing: .2em; text-shadow: 0 0 6px #000; white-space: nowrap; }
   #announce { position: absolute; left: 0; right: 0; top: 18%; text-align: center; opacity: 0; transition: opacity .5s; }
   #announce.show { animation: ann 3.2s ease-out forwards; }
   #announce .big { font-size: clamp(30px, 4.6vw, 64px); letter-spacing: .5em; margin-left: .5em; color: #f2efe8; font-weight: 200; }
@@ -75,7 +125,7 @@
   @keyframes ann { 0% { opacity: 0; transform: translateY(8px) } 12% { opacity: 1; transform: none } 80% { opacity: 1 } 100% { opacity: 0 } }
   #toast { position: absolute; left: 0; right: 0; bottom: 18%; text-align: center; letter-spacing: .4em; color: var(--acc); font-size: 14px; opacity: 0; }
   #toast.show { animation: ann 1.8s ease-out forwards; }
-  #perf { position: absolute; left: 34px; bottom: 26px; white-space: pre; font-size: 11px; color: var(--dim); letter-spacing: .05em; display: none; line-height: 1.6; }
+  #perf { position: fixed; left: 34px; bottom: 26px; white-space: pre; font-size: 11px; color: var(--dim); letter-spacing: .05em; display: none; line-height: 1.6; pointer-events: none; z-index: 5; }
   #perf.on { display: block; }
   .vig { position: fixed; inset: 0; pointer-events: none; background: radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,.35) 100%); }
 </style>
@@ -93,6 +143,7 @@
     <div class="hpwrap"><div id="hpbar"></div><div id="hptxt">100</div></div>
     <div id="kills">0 bajas</div>
     <div id="left"></div>
+    <div id="objective" class="off"></div>
   </div>
   <div class="br">
     <div id="weapon">PISTOLA</div>
@@ -101,44 +152,85 @@
     <div id="slots"></div>
     <div id="flash">LINTERNA · F</div>
   </div>
+  <div id="marker"><div class="dia"></div><div class="txt"></div></div>
   <div id="announce"></div>
   <div id="toast"></div>
-  <div id="perf"></div>
 </div>
+<div id="perf"></div>
 <div id="crosshair"></div>
 
 <div id="menu" class="screen">
   <div class="title">CARRONA</div>
-  <div class="sub">UN LUGARCITO · MUCHOS ZOMBIS</div>
-  <div class="keys">
-    <span><b>WASD</b></span><span>moverte · <b>shift</b> correr</span>
-    <span><b>mouse</b></span><span>apuntar · <b>click</b> disparar</span>
-    <span><b>R</b></span><span>recargar · <b>1-4</b> armas</span>
-    <span><b>espacio</b></span><span>empujar / trepar (frente a un mueble)</span>
-    <span><b>C / ctrl</b></span><span>agacharse</span>
-    <span><b>Q / E</b></span><span>girar cámara · <b>rueda</b> zoom</span>
-    <span><b>F</b></span><span>linterna · <b>esc</b> pausa</span>
+  <div class="sub" id="menu-sub">UN LUGARCITO · MUCHOS ZOMBIS</div>
+  <div class="stack">
+    <button class="btn primary" id="b-continue"></button>
+    <button class="btn" id="b-campaign" data-t="menu.campaign">CAMPAÑA</button>
+    <button class="btn" id="b-infinite" data-t="menu.infinite">INFINITO</button>
+    <button class="btn" id="b-options" data-t="menu.options">OPCIONES</button>
+    <button class="btn" id="b-fullscreen" data-t="menu.fullscreen">PANTALLA COMPLETA</button>
+    <button class="btn hidden" id="b-install" data-t="menu.install">INSTALAR</button>
   </div>
-  <div class="go">CLICK PARA EMPEZAR</div>
+  <div id="progress-line"></div>
   <div id="best"></div>
+  <div class="keys" id="keys"></div>
+  <div id="version"></div>
 </div>
 
-<div id="death" class="screen">
-  <div class="title">MORISTE</div>
-  <div class="sub">TE COMIERON EN LA OFICINA</div>
-  <div id="dstats"></div>
-  <div class="go">CLICK PARA REINTENTAR</div>
-  <div id="dbest"></div>
+<div id="campaign" class="screen">
+  <div class="title mid" data-t="campaign.title">CAMPAÑA</div>
+  <div class="sub" data-t="campaign.sub">las misiones se abren de a una</div>
+  <div class="list" id="mission-list"></div>
+  <div class="row"><button class="btn" id="b-campaign-back" data-t="campaign.back">VOLVER</button></div>
+</div>
+
+<div id="infinite" class="screen">
+  <div class="title mid" data-t="infinite.title">INFINITO</div>
+  <div class="sub" data-t="infinite.sub">oleadas sin fin en el lugar que elijas</div>
+  <div class="list" id="map-list"></div>
+  <div class="row"><button class="btn" id="b-infinite-back" data-t="campaign.back">VOLVER</button></div>
+</div>
+
+<div id="options" class="screen">
+  <div class="title mid" data-t="options.title">OPCIONES</div>
+  <div id="opts"></div>
+  <div class="row">
+    <button class="btn small" id="b-options-reset" data-t="options.reset">RESTABLECER</button>
+    <button class="btn" id="b-options-back" data-t="options.back">VOLVER</button>
+  </div>
 </div>
 
 <div id="pause" class="screen">
-  <div class="title" style="font-size:clamp(32px,5vw,70px)">PAUSA</div>
-  <div class="opts">
-    <span>CALIDAD</span><select id="q-sel"><option value="bajo">bajo</option><option value="medio">medio</option><option value="alto">alto</option></select>
-    <span>VOLUMEN</span><input id="vol" type="range" min="0" max="100" value="80">
-    <span>SACUDIDA</span><input id="shake" type="range" min="0" max="100" value="100">
+  <div class="title mid" data-t="pause.title">PAUSA</div>
+  <div class="stack">
+    <button class="btn primary" id="b-resume" data-t="pause.resume">SEGUIR</button>
+    <button class="btn" id="b-pause-options" data-t="pause.options">OPCIONES</button>
+    <button class="btn" id="b-restart" data-t="pause.restart">REINICIAR</button>
+    <button class="btn" id="b-pause-menu" data-t="pause.menu">SALIR AL MENÚ</button>
   </div>
-  <div class="hint">ESC PARA SEGUIR</div>
+  <div class="hint" data-t="pause.hint">esc para seguir</div>
+</div>
+
+<div id="death" class="screen">
+  <div class="title" data-t="death.title">MORISTE</div>
+  <div class="sub" id="death-sub">TE COMIERON EN LA OFICINA</div>
+  <div class="stats" id="dstats"></div>
+  <div class="row">
+    <button class="btn primary" id="b-retry" data-t="death.retry">REINTENTAR</button>
+    <button class="btn" id="b-death-menu" data-t="death.menu">MENÚ</button>
+  </div>
+  <div id="dbest"></div>
+</div>
+
+<div id="win" class="screen">
+  <div class="title mid" data-t="win.title">MISIÓN CUMPLIDA</div>
+  <div class="sub" id="win-sub"></div>
+  <div class="stats" id="wstats"></div>
+  <div class="row">
+    <button class="btn primary" id="b-next" data-t="win.next">SIGUIENTE MISIÓN</button>
+    <button class="btn" id="b-again" data-t="win.again">REPETIR</button>
+    <button class="btn" id="b-win-menu" data-t="win.menu">MENÚ</button>
+  </div>
+  <div id="wbest"></div>
 </div>
 <div class="vig"></div>
 

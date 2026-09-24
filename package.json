@@ -1,11 +1,13 @@
 {
   "name": "carrona",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
-  "description": "Zombis top-down con ragdoll activo: física XPBD propia, músculos PD, marcha por IK y biblioteca de movimientos físicos, en Three.js",
+  "description": "Zombis top-down con ragdoll activo: física XPBD propia, músculos PD, marcha por IK, cinco lugares, campaña de misiones y modo infinito, en Three.js",
   "scripts": {
-    "test": "node test/t_world.mjs && node test/t_ragdoll.mjs && node test/t_nav.mjs && node test/t_props.mjs && node test/t_realism.mjs && node test/t_horde.mjs && node test/t_stampede.mjs && node test/t_hits.mjs && node test/t_anim.mjs && node test/t_moves.mjs && node test/t_parkour.mjs && node test/t_quality.mjs",
-    "serve": "python serve.py"
+    "test": "node test/t_world.mjs && node test/t_ragdoll.mjs && node test/t_nav.mjs && node test/t_props.mjs && node test/t_realism.mjs && node test/t_horde.mjs && node test/t_stampede.mjs && node test/t_hits.mjs && node test/t_anim.mjs && node test/t_moves.mjs && node test/t_parkour.mjs && node test/t_quality.mjs && node test/t_maps.mjs && node test/t_mission.mjs && node test/t_progress.mjs && node test/t_options.mjs && node test/t_build.mjs",
+    "serve": "python serve.py",
+    "icons": "node tools/icons.mjs",
+    "build": "node tools/build.mjs"
   }
 }

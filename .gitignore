@@ -6,3 +6,6 @@ test/dbg*.mjs
 node_modules/
 Thumbs.db
 .DS_Store
+# salida del build y el define que genera para Inno Setup
+dist/
+installer/version.iss

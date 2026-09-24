@@ -1,30 +1,42 @@
 // ─────────────────────────────────────────────────────────────────────────────
-//  game.js — Orquesta todo: mundo, nivel, jugador, horda, armas, oleadas,
-//  efectos, sonido y HUD. main.js sólo arranca y hace girar el bucle.
+//  game.js — Orquesta todo: mundo, mapa, jugador, horda, armas, oleadas,
+//  misiones, progreso, efectos, sonido y HUD. main.js sólo arranca, arma las
+//  pantallas y hace girar el bucle.
+//
+//  Estados: 'menu' (cámara cinemática sobre el mapa, zombis paseando),
+//  'playing', 'paused' (nada se simula, el audio se congela), 'dead' y 'won'.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import * as THREE from 'three';
 import { PhysWorld } from '../phys/world.js';
-import { HEAD, CHEST, HIP, HAR, HAL, BONES, B_SKULL } from '../phys/ragdoll.js';
+import { HEAD, CHEST, HIP, HAR } from '../phys/ragdoll.js';
 import { NavGrid } from './nav.js';
-import { LevelBuilder, buildOffice } from './level.js';
+import { LevelBuilder } from './level.js';
+import { getMap, MAPS, MAP_ORDER } from './maps.js';
 import { PropSystem } from './props.js';
 import { ZombieManager, ATTACKS } from './zombie.js';
 import { Player } from './player.js';
 import { WEAPONS, WEAPON_ORDER, fireHitscan } from './weapons.js';
+import { CAMPAIGN, missionById, infiniteMission, MissionManager, ITEM_STYLE } from './mission.js';
+import { loadProgress, saveProgress, recordAttempt, recordResult, recordInfinite, isMissionUnlocked, isInfiniteUnlocked, nextMission, missionsDone } from './progress.js';
+import { OPTIONS, optionByKey, defaultSettings, normalizeSettings, saveSettings, rebind, DEFAULT_KEYS } from './options.js';
+import { t, tx, setLang, getLang } from '../core/i18n.js';
 import { Materials } from '../render/materials.js';
 import { BodyRenderer, CorpseBuffer, paintBody, bloodyBone } from '../render/bodies.js';
 import { PropRenderer } from '../render/props_render.js';
 import { FX } from '../render/fx.js';
 import { weaponModel, flashlightModel, beamCone } from '../render/models.js';
-import { makeRng, clamp, clamp01, lerp, damp, TAU } from '../core/util.js';
+import { makeRng, clamp, clamp01, TAU } from '../core/util.js';
 
 const SKIN_PLAYER = [0.79, 0.45, 0.28];
 const _c = new THREE.Color();
 function lin(hex) { _c.setHex(hex); return [_c.r, _c.g, _c.b]; }
 
 export class Game {
-  constructor(renderer, audio, ui, input) {
+  /**
+   * @param settings ajustes ya normalizados (ver options.js); el juego los aplica y los guarda
+   */
+  constructor(renderer, audio, ui, input, settings = null) {
     this.R = renderer;
     this.scene = renderer.scene;
     this.audio = audio;
@@ -40,6 +52,7 @@ export class Game {
     this.props = new PropSystem(this.world);
     this.propR = new PropRenderer(this.scene, this.materials, this.props);
     this.level = null; this.nav = null; this.zm = null; this.player = null;
+    this.map = null; this.mapId = null;
     this.state = 'menu';
     this.time = 0;
     this.hits = [];
@@ -47,10 +60,14 @@ export class Game {
     this._dir = { x: 0, z: 0 };
     this._fwd = { x: 0, z: -1 }; this._rgt = { x: 1, z: 0 };
     this._v = new THREE.Vector3(); this._v2 = new THREE.Vector3();
-    this.settings = { shake: 1, quality: renderer.qualityName, volume: 0.8, camDist: renderer.camDistTarget };
+    this._scr = { x: 0, y: 0, visible: false };
+    this.settings = settings || defaultSettings();
     this.perf = { phys: 0, frame: 0, fps: 0, _acc: 0, _n: 0 };
     this.stats = { kills: 0, headshots: 0, severs: 0, wave: 0, time: 0, shots: 0, hits: 0 };
     this.best = this._loadBest();
+    this.progress = loadProgress();
+    this.missionDef = null; this.mission = null;
+    this._timers = [];
 
     // modelos del jugador
     this.weaponModels = {};
@@ -65,17 +82,21 @@ export class Game {
     this.beam = beamCone(8.5, 1.9);
     this.scene.add(this.beam);
 
-    // pickups
+    // pickups y el faro del objetivo
     this.pickups = [];
     this.pickupGroup = new THREE.Group();
     this.scene.add(this.pickupGroup);
+    this.beacon = this._beaconMesh();
+    this.scene.add(this.beacon);
 
     // oleadas
     this.wave = 0; this.waveT = 0; this.waveLeft = 0; this.waveTotal = 0; this.spawnT = 0;
-    this.betweenT = 0; this.waveActive = false;
+    this.betweenT = 0; this.waveActive = false; this.wavesCleared = 0;
+    this.stampede = null; this.stampedeT = null;
+    this.wcfg = null;
 
-    this.buildLevel();
-    this.startMenu();
+    this.buildLevel(this._startMapId());
+    // el menú lo abre main.js (`startMenu()`) cuando la UI ya conoce al juego
   }
 
   _loadBest() {
@@ -84,25 +105,50 @@ export class Game {
   _saveBest() {
     try { localStorage.setItem('carrona.best', JSON.stringify(this.best)); } catch { /* nada */ }
   }
+  _saveProgress() { saveProgress(this.progress); }
+
+  /** El menú arranca sobre el mapa de la última misión jugada. */
+  _startMapId() {
+    const last = this.progress.last;
+    if (!last) return 'office';
+    if (last.startsWith('inf_')) return MAPS[last.slice(4)] ? last.slice(4) : 'office';
+    const m = missionById(last);
+    return m && MAPS[m.mapId] ? m.mapId : 'office';
+  }
+
+  /** Algo para dentro de un rato (anuncios encadenados); se descarta al cambiar de partida. */
+  later(fn, sec) { this._timers.push({ t: sec, fn }); }
+  _tickTimers(dt) {
+    for (let i = this._timers.length - 1; i >= 0; i--) {
+      const T = this._timers[i];
+      T.t -= dt;
+      if (T.t <= 0) { this._timers.splice(i, 1); T.fn(); }
+    }
+  }
 
   // ═══ nivel ════════════════════════════════════════════════════════════════
-  buildLevel() {
+  /** Arma un mapa del registro. Tira abajo el anterior: mallas, luces, estáticos, cuerpos, grilla. */
+  buildLevel(mapId) {
+    const map = getMap(mapId);
     const w = this.world;
+    if (this.level) {
+      this._clearBodies();
+      this._clearPickups();
+      this.props.clear();
+      this.level.dispose();
+    }
     w.reset();
-    this.level = new LevelBuilder(this.scene, w, this.materials, makeRng(42));
-    buildOffice(this.level);
-    this.nav = new NavGrid(w, { cell: 0.4, margin: 0.30, vaultTop: 1.05 });   // escritorios y mesas se trepan
-    this.zm = new ZombieManager(w, this.nav, this.rng);
-    this.R.applyMood({
-      background: 0x06070a, hemiSky: 0x33405f, hemiGround: 0x1a1713, hemiIntensity: 0.95,
-      moonColor: 0x92a6cf, moonIntensity: 0.78, bloom: 0.26, exposure: 1.06, vignette: 0.5,
-    });
+    this.level = new LevelBuilder(this.scene, w, this.materials, makeRng(map.seed));
+    map.build(this.level);
+    this.nav = new NavGrid(w, map.nav);
+    this.zm = new ZombieManager(w, this.nav, this.rng);   // la horda captura la grilla: se recrea con ella
+    this.R.applyMood(map.mood);
+    this.map = map; this.mapId = map.id;
     this._spawnProps();
   }
 
   _spawnProps() {
     this.props.clear();
-    const R = this.rng;
     for (const s of this.level.propSpecs) {
       if (s.kind === 'chair') this.props.addChair(s.x, s.z, s.yaw, s.color);
       else this.props.addBox(s.x, 0.001, s.z, s.w, s.h, s.d, s.yaw, s.mass, s.color);
@@ -110,8 +156,8 @@ export class Game {
   }
 
   _clearBodies() {
-    this.zm.clear();
-    if (this.player) { this.player.body.dispose(); }
+    if (this.zm) this.zm.clear();
+    if (this.player && this.player.body.alive) this.player.body.dispose();
     this.corpses.clear();
     for (const b of this.corpseBoxes) if (b) b.dead = true;
     this.corpseBoxes.fill(null);
@@ -121,16 +167,26 @@ export class Game {
     this.world.compact();
   }
 
+  _makePlayer() {
+    const st = this.level.playerStart;
+    this.player = new Player(this.world, this.rng, { x: st.x, z: st.z, yaw: 0 });
+    paintBody(this.player.body, this.rng, { skin: SKIN_PLAYER, shirt: lin(0x6c7a8c), pants: lin(0x2b3242), shoes: lin(0x1b1b1f), sleeves: true });
+    return this.player;
+  }
+
   startMenu() {
     this.state = 'menu';
+    this._timers.length = 0;
+    this.mission = null; this.missionDef = null;
+    this.stampede = null; this.stampedeT = null; this.waveActive = false; this.wave = 0;
     this._clearBodies();
     this._spawnProps();
     this._clearPickups();
-    this.player = new Player(this.world, this.rng, { x: this.level.playerStart.x, z: this.level.playerStart.z, yaw: 0 });
-    paintBody(this.player.body, this.rng, { skin: SKIN_PLAYER, shirt: lin(0x6c7a8c), pants: lin(0x2b3242), shoes: lin(0x1b1b1f), sleeves: true });
+    this._makePlayer();
     this.player.alive = false;    // en el menú nadie lo persigue
     // zombis deambulando por todos lados
-    for (let i = 0; i < 26; i++) {
+    const n = this.map.menuZombies ?? 24;
+    for (let i = 0; i < n; i++) {
       const p = this.nav.randomWalkable(this.rng);
       if (!p) continue;
       const Z = this.zm.spawn(this.rng() < 0.12 ? 'brute' : 'walker', p.x, p.z, this.rng() * TAU, true, this._restPose());
@@ -140,34 +196,124 @@ export class Game {
     this.R.cinematic = true;
     this.R.setFade(0);
     this.R.setDamage(0);
+    this.beacon.visible = false;
     this._setWeaponVisible(null);
-    this.ui.showMenu(this.best);
+    this.audio.setIntensity(0);
+    this.ui.showMenu(this.menuInfo());
   }
 
-  newGame() {
+  /** Lo que muestra el menú principal. */
+  menuInfo() {
+    const nxt = nextMission(this.progress, CAMPAIGN);
+    const done = missionsDone(this.progress, CAMPAIGN);
+    return {
+      best: this.best, map: this.map, done, total: CAMPAIGN.length,
+      next: nxt && done < CAMPAIGN.length ? { id: nxt.id, name: tx(nxt.name) } : null,
+    };
+  }
+
+  /** Las misiones de la campaña con su estado, para la pantalla de campaña. */
+  campaignEntries() {
+    return CAMPAIGN.map(m => {
+      const p = this.progress.missions[m.id];
+      const unlocked = isMissionUnlocked(this.progress, CAMPAIGN, m.id);
+      return {
+        id: m.id, name: tx(m.name), brief: tx(m.brief), map: getMap(m.mapId).name, mapId: m.mapId,
+        unlocked, done: !!(p && p.done), bestTime: p ? p.bestTime : null, attempts: p ? p.attempts : 0,
+      };
+    });
+  }
+
+  /** Los mapas del modo infinito con sus récords. */
+  infiniteEntries() {
+    return MAP_ORDER.map(id => {
+      const m = MAPS[id], r = this.progress.infinite[id];
+      return { mapId: id, name: m.name, sub: m.sub, unlocked: isInfiniteUnlocked(this.progress, CAMPAIGN, id), best: r && r.runs ? r : null };
+    });
+  }
+
+  // ═══ partidas ═════════════════════════════════════════════════════════════
+  startMission(id) {
+    const def = missionById(id);
+    if (!def || !isMissionUnlocked(this.progress, CAMPAIGN, id)) return false;
+    this.newGame(def);
+    return true;
+  }
+  startInfinite(mapId) {
+    if (!MAPS[mapId] || !isInfiniteUnlocked(this.progress, CAMPAIGN, mapId)) return false;
+    this.newGame(infiniteMission(mapId));
+    return true;
+  }
+  /** Reintentar lo mismo (muerte, victoria, pausa). */
+  retry() { if (this.missionDef) this.newGame(this.missionDef); else this.startMenu(); }
+  /** La misión que sigue en la campaña (o el menú si no queda ninguna). */
+  nextMission() {
+    const i = this.missionDef ? CAMPAIGN.findIndex(m => m.id === this.missionDef.id) : -1;
+    const nxt = i >= 0 && i + 1 < CAMPAIGN.length ? CAMPAIGN[i + 1] : null;
+    if (nxt && isMissionUnlocked(this.progress, CAMPAIGN, nxt.id)) this.newGame(nxt);
+    else this.startMenu();
+  }
+
+  newGame(def) {
+    this.audio.init(); this.audio.resume();
+    if (def.mapId !== this.mapId) this.buildLevel(def.mapId);
+    this.missionDef = def;
     this.state = 'playing';
+    this._timers.length = 0;
     this._clearBodies();
     this._spawnProps();
     this._clearPickups();
+    const P = this._makePlayer();
     const st = this.level.playerStart;
-    this.player = new Player(this.world, this.rng, { x: st.x, z: st.z, yaw: 0 });
-    paintBody(this.player.body, this.rng, { skin: SKIN_PLAYER, shirt: lin(0x6c7a8c), pants: lin(0x2b3242), shoes: lin(0x1b1b1f), sleeves: true });
+    // arsenal inicial de la misión
+    const weapons = (def.start && def.start.weapons) || ['pistol'];
+    for (const k of weapons) if (k !== 'pistol') P.arsenal.give(k);
+    P.arsenal.switchTo(weapons[0]); P.arsenal.switchT = 0;
     this.stats = { kills: 0, headshots: 0, severs: 0, wave: 0, time: 0, shots: 0, hits: 0 };
-    this.wave = 0; this.waveActive = false; this.betweenT = 4.0; this.waveLeft = 0;
+    this.wcfg = def.waves || null;
+    this.wave = 0; this.waveActive = false; this.waveLeft = 0; this.wavesCleared = 0;
+    this.betweenT = this.wcfg ? this.wcfg.firstDelay : 0;
+    this.stampede = null; this.stampedeT = null;       // una estampida a medias no pasa a la partida siguiente
     // unos cuantos dormidos por el edificio, lejos del jugador
-    for (let i = 0; i < 9; i++) {
+    const sleepers = def.sleepers ?? 9;
+    for (let i = 0; i < sleepers; i++) {
       const p = this.nav.randomReachable(this.rng, st.x, st.z, 9, 26) || this.nav.randomWalkable(this.rng);
       if (!p) continue;
       this._spawnZombie(this.rng() < 0.3 ? 'jogger' : 'walker', p.x, p.z, this.rng() * TAU, true);
     }
     this.R.cinematic = false;
     this.R.camYawTarget = -0.42; this.R.camYaw = -0.42;
+    this.R.camDist = this.R.camDistTarget;
     this.R.setFade(0);
     this.R.setDamage(0);
-    this._setWeaponVisible('pistol');
+    this._setWeaponVisible(P.arsenal.current);
     this.ui.hideAll();
-    this.ui.announce('SOBREVIVÍ', 'la oficina ya no es lo que era');
+    // progreso: cuenta el intento
+    if (!def.infinite) { recordAttempt(this.progress, def.id); this._saveProgress(); }
+    else { this.progress.last = def.id; this._saveProgress(); }
+    // la misión
+    this.mission = new MissionManager(def, this._missionHost());
+    if (def.infinite) this.ui.announce(t('ann.start'), getLang() === 'es' && this.map.texts ? this.map.texts.start : t('ann.startSub'));
+    else this.ui.announce(tx(def.name), tx(def.brief));
+    this.mission.start();
     this.audio.setIntensity(0.15);
+  }
+
+  /** Lo que la misión necesita del juego. */
+  _missionHost() {
+    return {
+      points: this.level.points || {},
+      kills: () => this.stats.kills,
+      wavesCleared: () => this.wavesCleared,
+      waveActive: () => this.waveActive,
+      playerPos: () => this.player,
+      randomSpot: () => this.nav.randomReachable(this.rng, this.player.x, this.player.z, 8, 30) || this.nav.randomWalkable(this.rng),
+      spawnObjective: (x, z, item) => this.spawnPickup('objective', item, x, z),
+      announce: (big, small) => { this.ui.announce(big, small); this.audio.objectiveSting(); },
+      toast: (txt) => this.ui.toast(txt),
+      later: (fn, sec) => this.later(fn, sec),
+      onWon: () => this._missionWon(),
+    };
   }
 
   /** Pose de descanso para un zombi dormido (o null: deambula). */
@@ -176,7 +322,7 @@ export class Game {
     return r < 0.45 ? null : r < 0.6 ? 'sit' : r < 0.7 ? 'kneel' : r < 0.82 ? 'supine' : r < 0.92 ? 'prone' : 'side';
   }
 
-  /** Dormidos por la oficina, lejos del jugador: se despiertan cuando los ves o hacés ruido. */
+  /** Dormidos por el lugar, lejos del jugador: se despiertan cuando los ves o hacés ruido. */
   _spawnSleepers(n) {
     const P = this.player;
     for (let k = 0, tries = 0; k < n && tries < 60; tries++) {
@@ -189,10 +335,9 @@ export class Game {
     }
   }
 
-  _spawnZombie(type, x, z, yaw, asleep, rest = null) {
-    const Z = this.zm.spawn(type, x, z, yaw, asleep, rest);
+  _spawnZombie(type, x, z, yaw, asleep, rest = null, traits = null) {
+    const Z = this.zm.spawn(type, x, z, yaw, asleep, rest, traits);
     paintBody(Z.body, this.rng, { zombie: true });
-    Z.hp = type === 'brute' ? 300 : type === 'runner' ? 75 : type === 'jogger' ? 95 : 110;
     return Z;
   }
 
@@ -203,8 +348,8 @@ export class Game {
   }
   _pickupMesh(kind, weapon) {
     const g = new THREE.Group();
-    const colors = { ammo: 0x6d7a3a, health: 0xe8e2d2, weapon: 0x2a2c33 };
-    const glowC = { ammo: 0xffd24a, health: 0xff3b4a, weapon: 0x5aa0ff };
+    const colors = { ammo: 0x6d7a3a, health: 0xe8e2d2, weapon: 0x2a2c33, objective: 0x3a3630 };
+    const glowC = { ammo: 0xffd24a, health: 0xff3b4a, weapon: 0x5aa0ff, objective: (ITEM_STYLE[weapon] || {}).color || 0xffd24a };
     const base = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.28, 0.32), new THREE.MeshStandardMaterial({ color: colors[kind], roughness: 0.8 }));
     base.castShadow = true; base.position.y = 0.14;
     g.add(base);
@@ -221,6 +366,12 @@ export class Game {
       cross1.position.y = 0.30; g.add(cross1);
       const cross2 = cross1.clone(); cross2.rotation.y = Math.PI / 2; g.add(cross2);
     }
+    if (kind === 'objective') {
+      // una cosa de misión: un bloque más alto con una columna de luz finita que se ve de lejos
+      const col = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.12, 2.4, 6, 1, true),
+        new THREE.MeshBasicMaterial({ color: new THREE.Color(glowC.objective).multiplyScalar(1.6), toneMapped: false, transparent: true, opacity: 0.35, depthWrite: false, side: THREE.DoubleSide }));
+      col.position.y = 1.4; g.add(col);
+    }
     // sin luz puntual: cada luz cuesta en todos los píxeles; alcanza con el brillo
     return g;
   }
@@ -228,7 +379,7 @@ export class Game {
     const mesh = this._pickupMesh(kind, weapon);
     mesh.position.set(x, 0.01, z);
     this.pickupGroup.add(mesh);
-    this.pickups.push({ kind, weapon, x, z, mesh, t: this.rng() * 6, life: 90 });
+    this.pickups.push({ kind, weapon, x, z, mesh, t: this.rng() * 6, life: kind === 'objective' ? Infinity : 90 });
   }
   _dropRewards() {
     const P = this.player;
@@ -252,14 +403,16 @@ export class Game {
       if (!P.alive) continue;
       const d = Math.hypot(p.x - P.x, p.z - P.z);
       if (d < 0.85) {
-        if (p.kind === 'ammo') { P.arsenal.ammoAll(1); this.ui.toast('MUNICIÓN'); }
-        else if (p.kind === 'health') { P.hp = Math.min(P.maxHp, P.hp + 50); this.ui.toast('BOTIQUÍN +50'); }
+        if (p.kind === 'ammo') { P.arsenal.ammoAll(1); this.ui.toast(t('toast.ammo')); }
+        else if (p.kind === 'health') { P.hp = Math.min(P.maxHp, P.hp + 50); this.ui.toast(t('toast.health')); }
         else if (p.kind === 'weapon') {
           const fresh = P.arsenal.give(p.weapon);
-          this.ui.toast(fresh ? WEAPONS[p.weapon].name : WEAPONS[p.weapon].name + ' · MUNICIÓN');
+          this.ui.toast(fresh ? t('weapon.' + p.weapon) : t('toast.weaponAmmo', { weapon: t('weapon.' + p.weapon) }));
           if (fresh) this._setWeaponVisible(p.weapon);
+        } else if (p.kind === 'objective') {
+          if (this.mission) this.mission.onPickup(p);
         }
-        this.audio.pickup(p.kind);
+        this.audio.pickup(p.kind === 'objective' ? 'weapon' : p.kind);
         this.fx.sparks(p.x, 0.3, p.z, 0, 1, 0, 14, 1, 0.9, 0.5);
         this.pickupGroup.remove(p.mesh); this.pickups.splice(i, 1);
       }
@@ -267,81 +420,86 @@ export class Game {
   }
 
   // ═══ oleadas ══════════════════════════════════════════════════════════════
+  /** Puerta lejos del jugador, entre `k` al azar. */
+  _farDoor(k) {
+    const P = this.player, spawns = this.level.spawns;
+    let best = null, bd = -1;
+    for (let i = 0; i < k; i++) {
+      const s = k >= spawns.length ? spawns[i] : spawns[this.rng.int(0, spawns.length - 1)];
+      if (!s) break;
+      const d = Math.hypot(s.x - P.x, s.z - P.z);
+      if (d > bd) { bd = d; best = s; }
+    }
+    return best || spawns[0];
+  }
+
   _updateWaves(dt) {
-    if (!this.player.alive) return;
+    const W = this.wcfg;
+    if (!W || W.enabled === false || !this.player.alive) return;
     if (!this.waveActive) {
       this.betweenT -= dt;
       if (this.betweenT <= 0) this._startWave(this.wave + 1);
       return;
     }
     // ── estampida: cada tanto, una ráfaga de corredores por UNA puerta ──
-    if (this.wave >= 1) {
-      this.stampedeT = (this.stampedeT ?? (14 + this.rng() * 8)) - dt;
-      if (this.stampedeT <= 0 && !this.stampede) {
-        this.stampedeT = 22 + this.rng() * 12;
-        const P = this.player, spawns = this.level.spawns;
-        let best = null, bd = -1;
-        for (const s of spawns) { const d = Math.hypot(s.x - P.x, s.z - P.z); if (d > bd) { bd = d; best = s; } }
-        this.stampede = { door: best, left: 5 + this.wave, t: 0 };
-        this.ui.announce('¡ESTAMPIDA!', 'corredores por la puerta ' + (best.x < -19 ? 'oeste' : best.x > 19 ? 'este' : best.z < 0 ? 'norte' : 'sur'));
-        this.audio.waveSting(this.wave + 2);
+    const S = W.stampede;
+    if (S && this.wave >= S.from) {
+      if (this.stampedeT === null) this.stampedeT = S.first[0] + this.rng() * (S.first[1] - S.first[0]);
+      if (!this.stampede) {
+        this.stampedeT -= dt;
+        if (this.stampedeT <= 0) {
+          this.stampedeT = S.every[0] + this.rng() * (S.every[1] - S.every[0]);
+          const door = this._farDoor(this.level.spawns.length);
+          this.stampede = { door, left: S.count(this.wave), t: 0 };
+          this.ui.announce(t('ann.stampede'), t('ann.stampedeSub', { door: door.name || '' }));
+          this.audio.waveSting(this.wave + 2);
+        }
       }
     }
     if (this.stampede) {
-      const S = this.stampede;
-      S.t -= dt;
-      if (S.t <= 0) {
-        S.t = 0.18 + this.rng() * 0.2;
-        const d = S.door;
+      const St = this.stampede;
+      St.t -= dt;
+      if (St.t <= 0) {
+        St.t = 0.18 + this.rng() * 0.2;
+        const d = St.door;
         const Z = this._spawnZombie('runner', d.x + (this.rng() - 0.5) * 1.2, d.z + (this.rng() - 0.5) * 1.2, d.yaw, false);
         Z.alert = true;
-        if (--S.left <= 0) this.stampede = null;
+        if (--St.left <= 0) this.stampede = null;
       }
     }
     // ir soltando zombis por las puertas
     if (this.waveLeft > 0) {
       this.spawnT -= dt;
-      const maxAlive = Math.min(8 + this.wave * 3, 40);   // ahora todos corren: menos a la vez
+      const maxAlive = W.maxAlive(this.wave);
       if (this.spawnT <= 0 && this.zm.alive < maxAlive) {
-        this.spawnT = Math.max(0.25, 1.3 - this.wave * 0.08) * (0.6 + this.rng() * 0.8);
-        // puerta lejos del jugador
-        const P = this.player, spawns = this.level.spawns;
-        let best = null, bd = -1;
-        for (let k = 0; k < 3; k++) {
-          const s = spawns[this.rng.int(0, spawns.length - 1)];
-          const d = Math.hypot(s.x - P.x, s.z - P.z);
-          if (d > bd) { bd = d; best = s; }
-        }
-        // mezcla: desde la primera oleada hay corredores y trotadores; los
-        // brutos aparecen en la 4; con las oleadas todo corre más
-        // estilo Left 4 Dead: la mayoría corre. Brutos desde la 4.
-        const r = this.rng();
-        const type = (this.wave >= 4 && r < 0.06 + this.wave * 0.012) ? 'brute'
-          : (r < 0.40 + this.wave * 0.04) ? 'runner'
-          : (r < 0.78 + this.wave * 0.03) ? 'jogger' : 'walker';
+        this.spawnT = W.interval(this.wave) * (0.6 + this.rng() * 0.8);
+        const door = this._farDoor(3);
+        const type = W.mix(this.wave, this.rng());
         const jx = (this.rng() - 0.5) * 0.8, jz = (this.rng() - 0.5) * 0.8;
-        this._spawnZombie(type, best.x + jx, best.z + jz, best.yaw, false);
+        this._spawnZombie(type, door.x + jx, door.z + jz, door.yaw, false);
         this.waveLeft--;
       }
     } else if (this.zm.alive === 0) {
       this.waveActive = false;
-      this.betweenT = 9;
-      this.ui.announce('OLEADA ' + this.wave + ' LIMPIA', 'respirá, que vienen más');
-      this._dropRewards();
+      this.wavesCleared++;
+      this.betweenT = W.between;
+      this.ui.announce(t('ann.waveClear', { n: this.wave }), t('ann.waveClearSub'));
+      if (W.rewards) this._dropRewards();
       this.audio.setIntensity(0.15);
     }
   }
   _startWave(n) {
+    const W = this.wcfg;
     this.wave = n; this.stats.wave = n;
     this.waveActive = true;
-    this.waveTotal = 5 + n * 4 + Math.floor(n * n * 0.4);
+    this.waveTotal = W.total(n);
     this.waveLeft = this.waveTotal;
     this.spawnT = 0.5;
-    this.ui.announce('OLEADA ' + n, n === 1 ? 'vienen por las puertas' : ['más y más rápido', 'no te quedes quieto', 'la horda crece', 'apuntá a la cabeza'][n % 4]);
+    this.ui.announce(t('ann.wave', { n }), n === 1 ? t('ann.wave1') : t('ann.waveSub' + (n % 4)));
     this.audio.waveSting(n);
     this.zm.alertAll(this.player.x, this.player.z, 30);
     // y algunos dormidos por los rincones, que se despiertan cuando los ves o hacés ruido
-    this._spawnSleepers(2 + Math.min(n, 5));
+    this._spawnSleepers(W.sleepers(n));
   }
 
   // ═══ disparo ══════════════════════════════════════════════════════════════
@@ -451,6 +609,7 @@ export class Game {
     this._hk = {
       onAttack: (Z, dmg, ux, uz, kind = 'swipe') => {
         const P = this.player;
+        if (this.state === 'won') return;             // ya está: nadie te muerde en la foto final
         const A = ATTACKS[kind] || ATTACKS.swipe;
         const eff = A.effect || 'shove';
         const died = P.damage(dmg, Z.x, Z.z, eff === 'grab' ? 'grab' : kind);
@@ -518,15 +677,77 @@ export class Game {
     if (old) { w.boxes = w.boxes.filter(b => !b.dead); w._staticDirty = true; }
   }
 
+  // ═══ fin de partida ═══════════════════════════════════════════════════════
   _playerDied() {
     this.state = 'dead';
+    this._timers.length = 0;
     this.audio.death();
     this.audio.setIntensity(0);
     this.best.wave = Math.max(this.best.wave, this.stats.wave);
     this.best.kills = Math.max(this.best.kills, this.stats.kills);
     this._saveBest();
+    this._recordEnd(false);
     this._setWeaponVisible(null);
-    setTimeout(() => { if (this.state === 'dead') this.ui.showDeath(this.stats, this.best); }, 1800);
+    this.beacon.visible = false;
+    const def = this.missionDef;
+    this.later(() => { if (this.state === 'dead') this.ui.showDeath(this.stats, this.best, { map: this.map, mission: def }); }, 1.8);
+  }
+
+  _missionWon() {
+    if (this.state !== 'playing') return;
+    this.state = 'won';
+    this.audio.winSting();
+    this.audio.setIntensity(0);
+    this.best.wave = Math.max(this.best.wave, this.stats.wave);
+    this.best.kills = Math.max(this.best.kills, this.stats.kills);
+    this._saveBest();
+    const res = this._recordEnd(true);
+    this.beacon.visible = false;
+    this.later(() => this.ui.announce(t('ann.won'), t('ann.wonSub')), 2.0);
+    const def = this.missionDef;
+    const p = this.progress.missions[def.id];
+    const i = CAMPAIGN.findIndex(m => m.id === def.id);
+    const hasNext = i >= 0 && i + 1 < CAMPAIGN.length;
+    this.later(() => {
+      if (this.state === 'won') this.ui.showWin(this.stats, { map: this.map, mission: def, bestTime: p ? p.bestTime : null, newBest: res.newBest, hasNext, campaignDone: missionsDone(this.progress, CAMPAIGN) === CAMPAIGN.length });
+    }, 4.4);
+  }
+
+  /** Guarda el resultado en el progreso (misión o infinito). */
+  _recordEnd(won) {
+    const def = this.missionDef;
+    if (!def) return { firstTime: false, newBest: false };
+    let res = { firstTime: false, newBest: false };
+    if (def.infinite) recordInfinite(this.progress, def.mapId, { wave: this.stats.wave, kills: this.stats.kills });
+    else res = recordResult(this.progress, def.id, { won, time: this.stats.time, kills: this.stats.kills });
+    this._saveProgress();
+    return res;
+  }
+
+  // ═══ pausa y pantallas ════════════════════════════════════════════════════
+  pause() {
+    if (this.state !== 'playing') return;
+    this.state = 'paused';
+    this.audio.suspend();
+    this.ui.showPause();
+  }
+  resume() {
+    if (this.state !== 'paused') return;
+    this.state = 'playing';
+    this.audio.resume();
+    this.ui.hideAll();
+  }
+  /** Volver al menú desde donde sea. */
+  quitToMenu() {
+    if (this.state === 'playing' || this.state === 'paused') this._recordEnd(false);
+    this.audio.resume();
+    this.startMenu();
+  }
+  setFullscreen(on) {
+    try {
+      if (on && !document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
+      else if (!on && document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    } catch { /* sin API de pantalla completa */ }
   }
 
   // ═══ bucle ════════════════════════════════════════════════════════════════
@@ -536,23 +757,23 @@ export class Game {
     const t0 = performance.now();
 
     // ── entrada global ──
-    if (I.pressed('F3')) this.ui.togglePerf();
-    if (this.state === 'menu') {
-      if (I.pressed('Mouse0') || I.pressed('Enter') || I.pressed('Space')) { this.audio.init(); this.audio.resume(); this.newGame(); }
-    } else if (this.state === 'dead') {
-      if (P.deathT > 2.2 && (I.pressed('Mouse0') || I.pressed('Enter') || I.pressed('Space'))) this.newGame();
-      if (I.pressed('Escape')) this.startMenu();
-    } else if (this.state === 'paused') {
-      if (I.pressed('Escape') || I.pressed('KeyP')) { this.state = 'playing'; this.ui.hidePause(); this.audio.resume(); }
+    if (I.pressed('F3')) this.applySettings({ showFps: !this.settings.showFps });
+    if (this.state === 'paused') {
+      if (I.actPressed('pause')) { if (this.ui.optionsOpen) this.ui.back(); else this.resume(); }
     } else if (this.state === 'playing') {
-      if (I.pressed('Escape') || I.pressed('KeyP')) { this.state = 'paused'; this.ui.showPause(this.settings); }
+      if (I.actPressed('pause')) this.pause();
+    } else if (this.state === 'dead' || this.state === 'won') {
+      if (I.actPressed('pause') && this.ui.endScreenOn) this.startMenu();
+    } else if (this.state === 'menu') {
+      if (I.actPressed('pause')) this.ui.back();
     }
     if (this.state === 'paused') { this._render(0); I.endFrame(); return; }
+    this._tickTimers(dt);
 
     // ── cámara: giro y zoom (el zoom se recuerda) ──
-    if (I.pressed('KeyQ')) R.rotateCamera(Math.PI / 4);
-    if (I.pressed('KeyE')) R.rotateCamera(-Math.PI / 4);
-    if (I.wheel) { R.zoomCamera(I.wheel * 1.6); this.settings.camDist = R.camDistTarget; try { localStorage.setItem('carrona.settings', JSON.stringify(this.settings)); } catch { /* nada */ } }
+    if (I.actPressed('camLeft')) R.rotateCamera(Math.PI / 4);
+    if (I.actPressed('camRight')) R.rotateCamera(-Math.PI / 4);
+    if (I.wheel) { R.zoomCamera(I.wheel * 1.6); this.settings.camDist = R.camDistTarget; saveSettings(this.settings); }
 
     // ── jugador ──
     const playing = this.state === 'playing';
@@ -560,14 +781,14 @@ export class Game {
     if (playing) {
       R.forwardXZ(this._fwd); R.rightXZ(this._rgt);
       const inp = {
-        mx: I.axis('KeyA', 'KeyD') + I.axis('ArrowLeft', 'ArrowRight'),
-        mz: I.axis('KeyS', 'KeyW') + I.axis('ArrowDown', 'ArrowUp'),
-        run: I.held('ShiftLeft') || I.held('ShiftRight'),
-        crouch: I.held('ControlLeft') || I.held('ControlRight') || I.held('KeyC'),
+        mx: I.axis('moveLeft', 'moveRight'),
+        mz: I.axis('moveDown', 'moveUp'),
+        run: I.act('run'),
+        crouch: I.act('crouch'),
         aimX: this._aim.x, aimZ: this._aim.z,
       };
-      // C tocado mientras corre = rodada de esquive (mantenido sin correr = agacharse)
-      inp.roll = I.pressed('KeyC') && inp.run;
+      // rodar tocado mientras corre = rodada de esquive (agacharse mantenido sin correr = agacharse)
+      inp.roll = I.actPressed('roll') && inp.run;
       inp.mx = clamp(inp.mx, -1, 1); inp.mz = clamp(inp.mz, -1, 1);
       P.update(dt, inp, this._fwd, this._rgt);
 
@@ -576,12 +797,12 @@ export class Game {
         // tirado en el piso o sacudido no se dispara ni se empuja
         const canAct = P.body.inControl && P.body.upright;
         // armas
-        for (let k = 0; k < 4; k++) if (I.pressed('Digit' + (k + 1)) && A.switchTo(WEAPON_ORDER[k])) { this._setWeaponVisible(A.current); this.audio.switchWeapon(); }
-        if (I.pressed('KeyR') && canAct && A.startReload()) this.audio.reload(A.current);
-        if (I.pressed('KeyF')) { P.flashlight = !P.flashlight; this.beam.visible = P.flashlight; }
-        // espacio: trepar lo que tenga adelante (escritorio, mesa); si no hay nada,
+        for (let k = 0; k < 4; k++) if (I.actPressed('weapon' + (k + 1)) && A.switchTo(WEAPON_ORDER[k])) { this._setWeaponVisible(A.current); this.audio.switchWeapon(); }
+        if (I.actPressed('reload') && canAct && A.startReload()) this.audio.reload(A.current);
+        if (I.actPressed('flashlight')) { P.flashlight = !P.flashlight; this.beam.visible = P.flashlight; }
+        // interactuar: trepar lo que tenga adelante (escritorio, mesa); si no hay nada,
         // corriendo salta (vallas, cadáveres, huecos), si no, empujón. En el piso: levantarse ya
-        if (I.pressed('Space')) {
+        if (I.actPressed('interact')) {
           const B = P.body;
           if (canAct) {
             const d = P.aimDir(this._dir);
@@ -602,8 +823,9 @@ export class Game {
       }
       this._updatePickups(dt);
       this._updateWaves(dt);
+      if (this.mission) this.mission.update(dt);
       this.stats.time += dt;
-    } else if (this.state === 'dead') {
+    } else if (this.state === 'dead' || this.state === 'won') {
       P.update(dt, { mx: 0, mz: 0, run: false, aimX: P.aim.x, aimZ: P.aim.z }, this._fwd, this._rgt);
     }
 
@@ -639,18 +861,18 @@ export class Game {
     this.perf._acc += dt; this.perf._n++;
     if (this.perf._acc >= 0.5) {
       this.perf.fps = this.perf._n / this.perf._acc; this.perf._acc = 0; this.perf._n = 0;
-      // calidad adaptativa: si no llega a 45 fps sostenidos, baja un escalón
-      // (nunca sube sola; si el usuario eligió a mano, no se toca)
-      if (this.settings.autoQuality !== false && playing) {
+      // calidad adaptativa: si no llega a 45 fps sostenidos, baja un escalón (nunca sube sola)
+      if (this.settings.autoQuality && playing) {
         this.perf.lowT = this.perf.fps < 45 ? (this.perf.lowT || 0) + 0.5 : 0;
         if (this.perf.lowT >= 3 && this.R.qualityName !== 'bajo') {
           const next = this.R.qualityName === 'alto' ? 'medio' : 'bajo';
-          this.R.setQuality(next); this.settings.quality = next; this.perf.lowT = 0;
-          this.ui.toast('CALIDAD → ' + next.toUpperCase());
+          this.perf.lowT = 0;
+          this.applySettings({ quality: next });
+          this.ui.toast(t('toast.quality', { q: t('options.quality.' + next).toUpperCase() }));
         }
       }
     }
-    if (this.ui.perfVisible) this.ui.perf(this._perfText());
+    if (this.settings.showFps) this.ui.perf(this._perfText());
     I.endFrame();
   }
 
@@ -659,18 +881,41 @@ export class Game {
     return `${this.perf.fps.toFixed(0)} fps · frame ${this.perf.frame.toFixed(1)} ms · física ${this.perf.phys.toFixed(1)} ms\n` +
       `${s.particles} partículas · ${s.constraints} restricciones · ${s.bones} huesos · ${s.pairs} pares\n` +
       `zombis ${this.zm.alive} vivos / ${this.zm.zombies.length} · cadáveres ${this.corpses.n} · props despiertos ${this.props.awakeCount}\n` +
-      `huesos dibujados ${this.bodies.drawnBones} · calidad ${this.R.qualityName}`;
+      `huesos dibujados ${this.bodies.drawnBones} · calidad ${this.R.qualityName} · mapa ${this.mapId}`;
   }
 
   _hud() {
-    const P = this.player, A = P.arsenal, W = A.weapon;
+    const P = this.player, A = P.arsenal, W = A.weapon, M = this.mission;
+    let objective = '', progress = '';
+    if (M && M.current) { objective = M.describe(); progress = M.progress(); }
     this.ui.hud({
       hp: P.hp, maxHp: P.maxHp, wave: this.wave, kills: this.stats.kills,
-      weapon: W.def.name, mag: W.mag, reserve: W.reserve, reloading: W.reloading > 0 ? 1 - W.reloading / W.def.reload : 0,
+      weapon: t('weapon.' + W.def.key), mag: W.mag, reserve: W.reserve, reloading: W.reloading > 0 ? 1 - W.reloading / W.def.reload : 0,
       left: this.waveActive ? this.waveLeft + this.zm.alive : 0, between: this.waveActive ? 0 : this.betweenT,
       owned: WEAPON_ORDER.filter(k => A.has(k)), current: A.current, flashlight: P.flashlight,
+      objective, progress, flashKey: this.settings.keys.flashlight[0] || '',
     });
     this.ui.crosshair(this.input.mouseX, this.input.mouseY, W.def.spread, P.moving);
+    // marcador del objetivo: proyectado a pantalla, pegado al borde si queda afuera
+    const tg = M ? M.target() : null;
+    if (tg) {
+      const s = this.R.worldToScreen(tg.x, 0.8, tg.z, this._scr);
+      this.ui.marker(s.x, s.y, s.visible, progress);
+    } else this.ui.marker(0, 0, false, '');
+  }
+
+  _beaconMesh() {
+    const g = new THREE.Group();
+    const col = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.42, 7, 8, 1, true),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(0xffd24a).multiplyScalar(1.4), toneMapped: false, transparent: true, opacity: 0.16, depthWrite: false, side: THREE.DoubleSide }));
+    col.position.y = 3.5;
+    g.add(col);
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.9, 1.15, 24),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(0xffd24a).multiplyScalar(2), toneMapped: false, transparent: true, opacity: 0.6, depthWrite: false, side: THREE.DoubleSide }));
+    ring.rotation.x = -Math.PI / 2; ring.position.y = 0.03;
+    g.add(ring);
+    g.visible = false;
+    return g;
   }
 
   _render(dt) {
@@ -679,6 +924,12 @@ export class Game {
     const dmg = this.state === 'playing' ? clamp01((1 - P.hp / P.maxHp) * 0.7 + P.damageFlash * 0.6) : (this.state === 'dead' ? clamp01(0.5 + P.deathT * 0.3) : 0);
     R.setDamage(dmg);
     if (this.state === 'dead') R.setFade(clamp01((P.deathT - 1.0) * 0.35));
+
+    // el faro del objetivo (sólo para llegar a un punto; las cosas a juntar tienen su propia columna)
+    const M = this.mission;
+    const tg = this.state === 'playing' && M && M.current && M.current.type === 'reach' ? M.target() : null;
+    if (tg) { this.beacon.visible = true; this.beacon.position.set(tg.x, 0, tg.z); this.beacon.rotation.y += dt * 0.6; }
+    else this.beacon.visible = false;
 
     // arma y linterna en las manos
     if (P && this.state !== 'menu') {
@@ -726,10 +977,40 @@ export class Game {
   }
 
   // ═══ ajustes ══════════════════════════════════════════════════════════════
-  applySettings(s) {
-    Object.assign(this.settings, s);
-    if (s.quality && s.quality !== this.R.qualityName) { this.R.setQuality(s.quality); this.settings.autoQuality = false; }
-    if (s.volume !== undefined) this.audio.setVolume(s.volume);
-    try { localStorage.setItem('carrona.settings', JSON.stringify(this.settings)); } catch { /* nada */ }
+  /**
+   * Aplica y guarda ajustes parciales `{clave: valor}` según el registro de
+   * opciones. `save=false` para la carga inicial.
+   */
+  applySettings(s, save = true) {
+    for (const key in s) {
+      const o = optionByKey(key);
+      if (!o) continue;
+      if (!o.volatile) this.settings[key] = s[key];
+      o.apply(this, s[key]);
+    }
+    if (save) saveSettings(this.settings);
+  }
+  /** Aplica todos los ajustes guardados (al arrancar). */
+  applyAllSettings() {
+    setLang(this.settings.lang);
+    for (const o of OPTIONS) if (!o.volatile) o.apply(this, this.settings[o.key]);
+    this.input.setKeys(this.settings.keys);
+  }
+  rebindKey(action, code) {
+    this.settings.keys = rebind(this.settings.keys, action, code);
+    this.input.setKeys(this.settings.keys);
+    saveSettings(this.settings);
+  }
+  resetKeys() {
+    this.settings.keys = {};
+    for (const a in DEFAULT_KEYS) this.settings.keys[a] = DEFAULT_KEYS[a].slice();
+    this.input.setKeys(this.settings.keys);
+    saveSettings(this.settings);
+  }
+  resetSettings() {
+    const d = defaultSettings();
+    this.settings = normalizeSettings({ ...d, lang: this.settings.lang });
+    this.applyAllSettings();
+    saveSettings(this.settings);
   }
 }

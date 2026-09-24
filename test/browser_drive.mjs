@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const PORT = 9333;
-const URL = 'http://127.0.0.1:8765/';
+const URL = 'http://localhost:8765/';
 const CHROME = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 const PROFILE = path.join(process.env.TEMP || 'C:/Temp', 'carrona-chrome');
 const OUT = path.resolve('shots');

@@ -107,6 +107,7 @@ export class Renderer {
     this.time = 0;
     this.cinematic = false; this.cineAngle = 0;
     this.lookAhead = 0.32;
+    this.shadowsOn = true;
 
     this.resize();
     window.addEventListener('resize', () => this.resize());
@@ -120,7 +121,7 @@ export class Renderer {
     const Q = QUALITY[name];
     this.moon.shadow.mapSize.set(Q.moonMap, Q.moonMap);
     if (this.moon.shadow.map) { this.moon.shadow.map.dispose(); this.moon.shadow.map = null; }
-    this.flash.castShadow = Q.shadows && Q.flashMap > 0;
+    this.flash.castShadow = this.shadowsOn && Q.shadows && Q.flashMap > 0;
     this.flash.shadow.mapSize.set(Q.flashMap, Q.flashMap);
     if (this.flash.shadow.map) { this.flash.shadow.map.dispose(); this.flash.shadow.map = null; }
     // el render target con MSAA hay que recrearlo
@@ -149,9 +150,26 @@ export class Renderer {
     this.width = w; this.height = h;
   }
 
+  /** Sombras sí/no (las de la luna y las de la linterna). Cambiarlo obliga a recompilar materiales. */
+  setShadows(on) {
+    on = !!on;
+    if (this.shadowsOn === on) return;
+    this.shadowsOn = on;
+    this.renderer.shadowMap.enabled = on;
+    this.moon.castShadow = on;
+    const Q = QUALITY[this.qualityName];
+    this.flash.castShadow = on && Q.shadows && Q.flashMap > 0;
+    this.scene.traverse(o => { if (o.material) o.material.needsUpdate = true; });
+  }
+
+  /** Bloom sí/no (el pase queda armado; sólo se saltea). */
+  setBloom(on) { this.bloom.enabled = !!on; }
+
   /** Paleta y clima del lugarcito. */
   applyMood(m = {}) {
     if (m.background !== undefined) this.scene.background = new THREE.Color(m.background);
+    // niebla del color del fondo: los mapas grandes o sucios la piden; sin `fog` se apaga
+    this.scene.fog = m.fog ? new THREE.Fog(new THREE.Color(m.fog.color ?? m.background ?? 0x06070a), m.fog.near ?? 30, m.fog.far ?? 90) : null;
     if (m.hemiSky !== undefined) this.hemi.color.set(m.hemiSky);
     if (m.hemiGround !== undefined) this.hemi.groundColor.set(m.hemiGround);
     if (m.hemiIntensity !== undefined) this.hemi.intensity = m.hemiIntensity;

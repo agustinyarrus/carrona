@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 fs.mkdirSync('shots', { recursive: true });
 import path from 'node:path';
-const PORT = 9333, URL = 'http://127.0.0.1:8765/';
+const PORT = 9333, URL = 'http://localhost:8765/';
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const list = await (await fetch(`http://127.0.0.1:${PORT}/json`)).json();
 const t = list.find(t => t.type === 'page' && t.url.startsWith(URL));
@@ -18,9 +18,9 @@ await send('Page.bringToFront');
 const args = process.argv.slice(2);
 if (args.includes('--reload')) { await send('Page.reload', { ignoreCache: true }); await sleep(6000); }
 // arrancar una partida y quedarse quieto en el pasillo
-await ev('window.carrona.newGame(); "ok"');
+await ev('window.carrona.startInfinite("office"); "ok"');
 await sleep(1500);
-const ensureAlive = async () => { const st = await ev('window.carrona.state'); if (st !== 'playing') { await ev('window.carrona.newGame(); "ok"'); await sleep(1500); } };
+const ensureAlive = async () => { const st = await ev('window.carrona.state'); if (st !== 'playing') { await ev('window.carrona.startInfinite("office"); "ok"'); await sleep(1500); } };
 const measure = async (q) => {
   await ev(`window.carrona.applySettings({quality:'${q}'}); "ok"`);
   await sleep(4000);
@@ -41,7 +41,7 @@ const keyUp = (code, key, vk) => send('Input.dispatchKeyEvent', { type: 'keyUp',
 const click = async (x, y) => { await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y }); await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1 }); await sleep(130); await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1 }); };
 if (args.includes('--player')) {
   // el jugador: vista general, sprint con el arma baja, disparo (retroceso), recarga
-  await ev('window.carrona.newGame(); "ok"'); await sleep(1200);
+  await ev('window.carrona.startInfinite("office"); "ok"'); await sleep(1200);
   const { innerWidth: W, innerHeight: H } = await ev('({innerWidth, innerHeight})');
   await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: W * 0.62, y: H * 0.38 });
   await sleep(400);

@@ -14,6 +14,7 @@ export class GameAudio {
     this.ctx = null;
     this.ready = false;
     this.volume = 0.8;
+    this.sfxVolume = 1; this.musicVolume = 1;   // dos buses debajo del master: efectos y ambiente
     this.lx = 0; this.lz = 0;         // el oyente (el jugador)
     this.moans = 0;
     this.intensity = 0;
@@ -32,6 +33,9 @@ export class GameAudio {
     this.comp.threshold.value = -14; this.comp.knee.value = 18; this.comp.ratio.value = 5;
     this.comp.attack.value = 0.003; this.comp.release.value = 0.18;
     this.master.connect(this.comp); this.comp.connect(ctx.destination);
+    // buses: todo lo que suena en el mundo va por `sfx`; el ambiente por `music`
+    this.sfx = ctx.createGain(); this.sfx.gain.value = this.sfxVolume; this.sfx.connect(this.master);
+    this.music = ctx.createGain(); this.music.gain.value = this.musicVolume; this.music.connect(this.master);
     // buffers de ruido
     this.white = this._noiseBuffer(2, 'white');
     this.brown = this._noiseBuffer(4, 'brown');
@@ -39,7 +43,11 @@ export class GameAudio {
     this.ready = true;
   }
   resume() { if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume(); }
+  /** Pausa: el contexto se congela (nada suena, nada avanza) hasta `resume()`. */
+  suspend() { if (this.ctx && this.ctx.state === 'running') this.ctx.suspend(); }
   setVolume(v) { this.volume = v; if (this.master) this.master.gain.value = v; }
+  setSfxVolume(v) { this.sfxVolume = v; if (this.sfx) this.sfx.gain.value = v; }
+  setMusicVolume(v) { this.musicVolume = v; if (this.music) this.music.gain.value = v; }
   listener(x, z) { this.lx = x; this.lz = z; }
 
   _noiseBuffer(sec, kind) {
@@ -70,7 +78,7 @@ export class GameAudio {
     if (g <= 0.001) return null;
     const G = ctx.createGain(); G.gain.value = gain * g;
     const P = ctx.createStereoPanner(); P.pan.value = pan;
-    G.connect(P); P.connect(this.master);
+    G.connect(P); P.connect(this.sfx);
     return G;
   }
   _noise(buf, dest, t0, dur, { lp = 8000, hp = 40, q = 0.7, peak = 1, decay = null, attack = 0.002 } = {}) {
@@ -105,7 +113,7 @@ export class GameAudio {
     if (!this.ready) return;
     const ctx = this.ctx, t = ctx.currentTime;
     const own = x === undefined;
-    const dest = own ? this.master : this._out(x, z, 1, 8, 40);
+    const dest = own ? this.sfx : this._out(x, z, 1, 8, 40);
     if (!dest) return;
     switch (kind) {
       case 'pistol':
@@ -132,25 +140,25 @@ export class GameAudio {
   empty() {
     if (!this.ready) return;
     const t = this.ctx.currentTime;
-    this._noise(this.white, this.master, t, 0.03, { lp: 5000, hp: 1500, peak: 0.25, decay: 0.02 });
+    this._noise(this.white, this.sfx, t, 0.03, { lp: 5000, hp: 1500, peak: 0.25, decay: 0.02 });
   }
   reload(kind) {
     if (!this.ready) return;
     const t = this.ctx.currentTime;
     const dur = kind === 'shotgun' ? 0.5 : 0.35;
-    this._noise(this.white, this.master, t, 0.04, { lp: 4000, hp: 800, peak: 0.2, decay: 0.03 });
-    this._noise(this.white, this.master, t + dur, 0.05, { lp: 5000, hp: 1200, peak: 0.28, decay: 0.035 });
-    this._tone('square', 900, this.master, t + dur, 0.02, 0.05);
+    this._noise(this.white, this.sfx, t, 0.04, { lp: 4000, hp: 800, peak: 0.2, decay: 0.03 });
+    this._noise(this.white, this.sfx, t + dur, 0.05, { lp: 5000, hp: 1200, peak: 0.28, decay: 0.035 });
+    this._tone('square', 900, this.sfx, t + dur, 0.02, 0.05);
   }
   switchWeapon() {
     if (!this.ready) return;
     const t = this.ctx.currentTime;
-    this._noise(this.white, this.master, t, 0.05, { lp: 3000, hp: 600, peak: 0.18, decay: 0.04 });
+    this._noise(this.white, this.sfx, t, 0.05, { lp: 3000, hp: 600, peak: 0.18, decay: 0.04 });
   }
   shove() {
     if (!this.ready) return;
     const t = this.ctx.currentTime;
-    this._noise(this.brown, this.master, t, 0.18, { lp: 600, hp: 40, peak: 0.6, decay: 0.14 });
+    this._noise(this.brown, this.sfx, t, 0.18, { lp: 600, hp: 40, peak: 0.6, decay: 0.14 });
   }
 
   // ═══ impactos ═════════════════════════════════════════════════════════════
@@ -226,30 +234,44 @@ export class GameAudio {
   hurt() {
     if (!this.ready) return;
     const t = this.ctx.currentTime;
-    this._noise(this.brown, this.master, t, 0.3, { lp: 500, hp: 30, peak: 0.9, decay: 0.25 });
-    this._tone('sine', 70, this.master, t, 0.35, 0.5, 35);
+    this._noise(this.brown, this.sfx, t, 0.3, { lp: 500, hp: 30, peak: 0.9, decay: 0.25 });
+    this._tone('sine', 70, this.sfx, t, 0.35, 0.5, 35);
   }
   death() {
     if (!this.ready) return;
     const t = this.ctx.currentTime;
-    this._tone('sine', 110, this.master, t, 2.2, 0.5, 28);
-    this._noise(this.brown, this.master, t, 1.5, { lp: 300, hp: 20, peak: 0.6, decay: 1.4 });
+    this._tone('sine', 110, this.sfx, t, 2.2, 0.5, 28);
+    this._noise(this.brown, this.sfx, t, 1.5, { lp: 300, hp: 20, peak: 0.6, decay: 1.4 });
   }
   pickup(kind = 'ammo') {
     if (!this.ready) return;
     const t = this.ctx.currentTime;
-    if (kind === 'health') { this._tone('sine', 520, this.master, t, 0.15, 0.2); this._tone('sine', 780, this.master, t + 0.12, 0.25, 0.2); }
-    else if (kind === 'weapon') { this._tone('square', 330, this.master, t, 0.08, 0.12); this._tone('square', 495, this.master, t + 0.09, 0.08, 0.12); this._tone('square', 660, this.master, t + 0.18, 0.18, 0.12); }
-    else { this._noise(this.white, this.master, t, 0.05, { lp: 3000, hp: 800, peak: 0.3, decay: 0.04 }); this._tone('sine', 440, this.master, t + 0.03, 0.12, 0.15); }
+    if (kind === 'health') { this._tone('sine', 520, this.sfx, t, 0.15, 0.2); this._tone('sine', 780, this.sfx, t + 0.12, 0.25, 0.2); }
+    else if (kind === 'weapon') { this._tone('square', 330, this.sfx, t, 0.08, 0.12); this._tone('square', 495, this.sfx, t + 0.09, 0.08, 0.12); this._tone('square', 660, this.sfx, t + 0.18, 0.18, 0.12); }
+    else { this._noise(this.white, this.sfx, t, 0.05, { lp: 3000, hp: 800, peak: 0.3, decay: 0.04 }); this._tone('sine', 440, this.sfx, t + 0.03, 0.12, 0.15); }
   }
   waveSting(n) {
     if (!this.ready) return;
     const ctx = this.ctx, t = ctx.currentTime;
-    const dest = this.master;
+    const dest = this.sfx;
     this._noise(this.brown, dest, t, 2.5, { lp: 200, hp: 20, peak: 0.5, decay: 2.2, attack: 0.6 });
     const f = 55 * Math.pow(2, (n % 4) / 12);
     this._tone('sawtooth', f, dest, t, 2.4, 0.12, f * 0.98, 0.5);
     this._tone('sawtooth', f * 1.5, dest, t + 0.3, 2.0, 0.08, f * 1.48, 0.5);
+  }
+  /** Objetivo cumplido: dos notas cortas que suben. */
+  objectiveSting() {
+    if (!this.ready) return;
+    const t = this.ctx.currentTime, dest = this.sfx;
+    this._tone('triangle', 440, dest, t, 0.18, 0.18);
+    this._tone('triangle', 660, dest, t + 0.16, 0.35, 0.18);
+  }
+  /** Misión cumplida: un acorde que se abre despacio, sobre el colchón. */
+  winSting() {
+    if (!this.ready) return;
+    const t = this.ctx.currentTime, dest = this.sfx;
+    for (const [f, d, k] of [[220, 0, 0.14], [277.2, 0.12, 0.12], [329.6, 0.24, 0.12], [440, 0.4, 0.1]]) this._tone('triangle', f, dest, t + d, 2.6, k, null, 0.08);
+    this._noise(this.white, dest, t, 2.0, { lp: 1200, hp: 300, peak: 0.05, decay: 1.8, attack: 0.5 });
   }
 
   // ═══ ambiente ═════════════════════════════════════════════════════════════
@@ -259,12 +281,12 @@ export class GameAudio {
     const n = ctx.createBufferSource(); n.buffer = this.brown; n.loop = true;
     const nlp = ctx.createBiquadFilter(); nlp.type = 'lowpass'; nlp.frequency.value = 220;
     const ng = ctx.createGain(); ng.gain.value = 0.05;
-    n.connect(nlp); nlp.connect(ng); ng.connect(this.master); n.start();
+    n.connect(nlp); nlp.connect(ng); ng.connect(this.music); n.start();
     // zumbido eléctrico
     const hum = ctx.createOscillator(); hum.type = 'sawtooth'; hum.frequency.value = 50;
     const hlp = ctx.createBiquadFilter(); hlp.type = 'lowpass'; hlp.frequency.value = 160;
     const hg = ctx.createGain(); hg.gain.value = 0.012;
-    hum.connect(hlp); hlp.connect(hg); hg.connect(this.master); hum.start();
+    hum.connect(hlp); hlp.connect(hg); hg.connect(this.music); hum.start();
     // colchón: dos sierras desafinadas
     this.padA = ctx.createOscillator(); this.padA.type = 'sawtooth';
     this.padB = ctx.createOscillator(); this.padB.type = 'sawtooth';
@@ -276,7 +298,7 @@ export class GameAudio {
     const lfoG = ctx.createGain(); lfoG.gain.value = 60;
     lfo.connect(lfoG); lfoG.connect(this.padLP.frequency); lfo.start();
     this.padA.connect(this.padLP); this.padB.connect(this.padLP); this.padC.connect(this.padLP);
-    this.padLP.connect(this.padG); this.padG.connect(this.master);
+    this.padLP.connect(this.padG); this.padG.connect(this.music);
     this._padChord(0);
     this.padA.start(); this.padB.start(); this.padC.start();
     this._padTimer = setInterval(() => this._padChord((this._padIdx + 1) % this._padNotes.length), 14000);

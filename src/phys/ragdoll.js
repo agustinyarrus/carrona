@@ -3359,6 +3359,7 @@ export class Ragdoll {
 
   /** Saca el cuerpo del mundo por completo. */
   dispose() {
+    if (!this.alive) return;   // dos veces no: liberaría partículas que ya son de otro
     const w = this.world;
     for (let b = 0; b < NB; b++) {
       if (this.boneAlive[b]) { w.killBone(this.bone[b]); this.boneAlive[b] = 0; }

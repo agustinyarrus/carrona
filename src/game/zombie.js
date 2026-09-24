@@ -26,11 +26,11 @@ import { OVER, HOP_STYLES } from '../phys/moves.js';
 import { clamp, clamp01, lerp, angDelta, TAU } from '../core/util.js';
 
 export const ZTYPES = {
-  //  walk: deambulando · run: persiguiendo (todos corren, a su manera) · agility: base del rasgo
-  walker: { walk: [0.35, 0.70], run: [2.3, 2.9], scale: [0.95, 1.06], mass: 1.0, tough: 1.0, arm: 'reach', stride: 0.26, dmg: 10, reach: 1.15, stiffness: 125, mms: 10, agility: 0.20 },
-  jogger: { walk: [0.45, 0.85], run: [2.9, 3.5], scale: [0.94, 1.03], mass: 0.95, tough: 0.9, arm: 'reach', stride: 0.29, dmg: 9, reach: 1.15, stiffness: 145, mms: 11, agility: 0.40 },
-  runner: { walk: [0.55, 1.00], run: [3.6, 4.4], scale: [0.92, 1.00], mass: 0.9, tough: 0.75, arm: 'pump', stride: 0.32, dmg: 8, reach: 1.10, stiffness: 165, mms: 13, agility: 0.65 },
-  brute:  { walk: [0.35, 0.55], run: [1.7, 2.2], scale: [1.16, 1.25], mass: 1.8, tough: 2.6, arm: 'reach', stride: 0.23, dmg: 24, reach: 1.35, stiffness: 130, mms: 9, agility: 0.10 },
+  //  walk: deambulando · run: persiguiendo (todos corren, a su manera) · agility: base del rasgo · hp: vida
+  walker: { walk: [0.35, 0.70], run: [2.3, 2.9], scale: [0.95, 1.06], mass: 1.0, tough: 1.0, arm: 'reach', stride: 0.26, dmg: 10, reach: 1.15, stiffness: 125, mms: 10, agility: 0.20, hp: 110 },
+  jogger: { walk: [0.45, 0.85], run: [2.9, 3.5], scale: [0.94, 1.03], mass: 0.95, tough: 0.9, arm: 'reach', stride: 0.29, dmg: 9, reach: 1.15, stiffness: 145, mms: 11, agility: 0.40, hp: 95 },
+  runner: { walk: [0.55, 1.00], run: [3.6, 4.4], scale: [0.92, 1.00], mass: 0.9, tough: 0.75, arm: 'pump', stride: 0.32, dmg: 8, reach: 1.10, stiffness: 165, mms: 13, agility: 0.65, hp: 75 },
+  brute:  { walk: [0.35, 0.55], run: [1.7, 2.2], scale: [1.16, 1.25], mass: 1.8, tough: 2.6, arm: 'reach', stride: 0.23, dmg: 24, reach: 1.35, stiffness: 130, mms: 9, agility: 0.10, hp: 300 },
 };
 
 //  Proporción de rasgos en la horda.
@@ -101,6 +101,7 @@ export class Zombie {
     this.runSpeed = lerp(T.run[0], T.run[1], rng()) * (parkour ? 1.08 : 1);
     this.speed = this.runSpeed;
     this.dmg = T.dmg;
+    this.hp = T.hp;            // la vida vive en el tipo: nadie nace inmortal por un `undefined`
     this.reach = T.reach * scale;
     this.state = opt.asleep ? 'idle' : 'chase';
     this.alert = !opt.asleep;
