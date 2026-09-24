@@ -142,7 +142,67 @@ la velocidad y en la dirección del movimiento (el jugador da pasos laterales mi
 otro lado; un tiro hace dar pasos hacia atrás). La rodilla se resuelve con IK de dos huesos
 usando el largo real de muslo y pantorrilla, doblando siempre hacia adelante. Caminar, trotar y
 correr son la misma marcha mezclada por velocidad: rodilla mínima de 125°, 103° y 89°, pie que
-sube 16, 26 y 34 cm. Los codos también salen por IK.
+sube 16, 26 y 34 cm. Los codos también salen por IK, y el estilo de brazos de caminar y el de
+correr se **mezclan en continuo** (un cambio seco tiraba las manos casi un metro en un cuadro).
+
+**Pies plantados, con peso.** La fase de la marcha avanza con lo que avanza la raíz (no con el
+tiempo, ni con un piso de cadencia), la zancada de la pose y la de la cadencia son la misma
+(estilo incluido) y la pierna que renguea da un paso más corto acortando su apoyo, no yendo más
+despacio: por construcción el pie apoyado se mueve hacia atrás exactamente a la velocidad del
+piso. Encima, mientras un pie está en apoyo su objetivo se **congela en el mundo** donde tocó el
+piso (la raíz avanza por substep y el objetivo local se calcula por cuadro: sin esto el pie se
+iba 6 cm adelante y volvía de un salto), la rodilla se resuelve para el pie que está plantado y
+no para el de la trayectoria, y se suelta recién cuando la pierna casi recta ya no llega (una
+sola vez por zancada, fundiendo el objetivo en un décimo de segundo). El vuelo del pie es una
+curva de Hermite que **llega al piso ya retrocediendo** (el pie "rasca" al aterrizar, como un
+corredor) en vez de llegar parado respecto del cuerpo. Corriendo aparece la **fase de vuelo**
+(apoyo del 64 % del ciclo) y la **pelvis baja** lo que la pierna de apoyo alcanza: las rodillas
+quedan siempre algo flexionadas, la cadera sube y baja con la zancada y el pie toca el piso en
+cada paso (antes flotaba un centímetro colgado de los músculos). Patinaje del pie apoyado, medido:
+0,2 m/s caminando y 0,3 corriendo (era 0,6 y 0,8).
+
+**Límites articulares de verdad.** Las partículas no tienen ángulos, pero la dirección de cada
+segmento respecto del marco del torso sí se acota, por substep y de a poco (2 cm, la mitad de
+la corrección, para que converja sin pelear). Rodillas y codos son **bisagras con cono**: la
+articulación sólo puede salirse de la línea cadera–pie hacia un cono de 65° (80° el codo)
+alrededor de la flexión nominal, así la rodilla no dobla al revés ni queda 30 cm de costado como
+un palo quebrado; sin músculo el cono se abre casi del todo (las rodillas de un cadáver caen de
+costado) y la cadera se relaja hacia afuera (las piernas "en carpa" de un muerto boca arriba se
+van cayendo solas). **Conos de cadera, hombro y cuello**: el muslo hasta 45° hacia atrás, 50°
+abierto, 20° cruzado y la rodilla no sube más de 30° sobre la cadera; el brazo hasta 48° detrás
+del plano del pecho y 27° cruzado; la cabeza 50° y el cuello 35° respecto del tronco, con un
+tope mínimo cabeza–pecho para que el cuello doble hasta 64° y no se pliegue dentro del tórax.
+**Autocolisión mínima**: manos y codos son esferas contra la cápsula pecho–cadera y contra la
+cabeza (en una caída de boca las manos pasaban por el medio del pecho). Y **los huesos tienen la
+última palabra**: al cerrar cada substep, después de contactos y límites, una pasada rígida sobre
+los quince huesos y las riostras del torso (dos barridos al cerrar el cuadro) deja el esqueleto
+del largo exacto; la pose objetivo también se relaja a los largos reales antes de usarse, así el
+músculo nunca pide un hueso estirado. Estiramiento máximo, medido: 2 % de pie, 8 % en un flinch
+de pistola (era 37 %), 26 % en una multitud de doce que se aplasta (era 116 %).
+
+**Balance por punto de captura** (lo que hace Euphoria). Cada cuadro se calcula dónde va a
+estar el cuerpo dentro de un cuarto de segundo respecto de donde debería (la raíz): la posición
+que se fue más allá de la correa más `τ · (velocidad del centro de masa − velocidad del centro
+de masa de la pose objetivo)`, porque inclinarse al arrancar o la zancada mueven el centro de
+masa a propósito y eso no es perder el equilibrio. Se descuenta frenarse contra algo (de eso se
+ocupa el estrellarse), cambiar de idea da un tercio de segundo de gracia (el jugador que corta a
+90° no se cae por cortar) y el error que decide se filtra en 50 ms: un empujón de verdad cambia
+la velocidad del cuerpo y queda, un salto de un cuadro pasa sin dejar rastro. Con el error
+pequeño los **brazos salen a equilibrar** en proporción (molinete hacia atrás y arriba si se va
+para atrás, afuera y abajo a frenar si se va adelante) y el tronco se echa en contra; pasado un
+umbral da **pasos de recuperación** hacia allá; pasado otro, cae con una caída elegida por la
+dirección. Medido: veinte estilos de caminar, treinta de correr, arrancar y frenar, correr en
+círculo, el jugador en zig-zag y retrocediendo, sin un solo tambaleo en falso; un empujón
+sostenido de 60 cm da un paso de recuperación y queda de pie.
+
+**Cadáveres que se asientan.** Un cuerpo sin músculo (muerto, tirado) lleva una **viscosidad
+hacia su propio campo rígido**: se calcula el movimiento de cuerpo rígido que mejor describe a
+todas las partículas (centro de masa, momento angular, tensor de inercia) y cada velocidad se
+funde un poco hacia ese campo, así se conservan el momento lineal y el angular (la caída sigue
+volando con el impulso que traía) pero el temblor interno se apaga. Recién muerto queda medio
+segundo de **tono residual** (cae como peso muerto, no como bolsa) y un pedazo cortado (la
+cabeza que vuela) tiene su propio grupo: no lo frena el cuerpo. Medido: un cadáver está quieto
+(< 1 cm/s) a los dos segundos y medio de morir y no vuelve a moverse en diez.
 
 **Estilos de marcha** (`moves.js`): cada cuerpo sortea al nacer un estilo de caminar y uno de
 correr, y los mezcla según la marcha. **Treinta de correr**: sprint, carga con los brazos
@@ -334,7 +394,7 @@ Las suites corren en Node sin navegador y miden comportamiento físico real: dis
 tiempos, velocidades.
 
 ```
-npm test                       # las once suites
+npm test                       # las doce suites
 node test/t_world.mjs          # motor: estabilidad, colisiones, expulsión suave, rendimiento
 node test/t_ragdoll.mjs        # ragdoll: de pie, marcha a 1.4 m/s, muerte, desmembrado, 40 cuerpos
 node test/t_nav.mjs            # campo de flujo, muebles trepables
@@ -348,6 +408,9 @@ node test/t_moves.mjs          # el catálogo: cada levantada, caída, muerte, s
                                # estilo y descanso, uno por uno (131 pruebas)
 node test/t_parkour.mjs        # saltos, trepadas por estilo, bajadas, rodadas, plancha, pared,
                                # el jugador ágil, heridas, los cincuenta estilos, rasgos (53 pruebas)
+node test/t_quality.mjs        # calidad biomecánica: patinaje del pie apoyado, rodillas y
+                               # cuello dentro de rango, estiramiento de huesos, cadáveres quietos,
+                               # picos de velocidad, y el balance sin falsos positivos (39 pruebas)
 ```
 
 Ejemplos de lo que se comprueba: que las quince levantadas terminan de pie desde su pose exacta
@@ -359,7 +422,10 @@ brazos a alturas distintas; que un caminante alertado corre a más de 2.3 m/s; q
 dormido en el piso se levanta y llega.
 
 Los umbrales de rendimiento se miden con la CPU libre: con el juego corriendo en Chrome al
-mismo tiempo fallan por contención, no por el código.
+mismo tiempo fallan por contención, no por el código. Los límites articulares, la pasada rígida,
+la autocolisión, el balance y los pies plantados cuestan un 15 % más por cuerpo de pie (40
+cuerpos caminando: 3,5 ms por cuadro contra 3,0); los presupuestos de `t_ragdoll` y `t_props`
+lo contemplan.
 
 Arneses de navegador (Chrome con puerto de depuración):
 

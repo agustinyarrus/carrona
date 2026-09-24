@@ -143,6 +143,7 @@ const FWD = { x: 0, z: -1 }, RGT = { x: 1, z: 0 };
   // escopeta contra otro: 9 perdigones, varios pegan
   const Z2 = zm.spawn('walker', 0, 3, Math.PI, true); Z2.hp = 110;
   Z2.wanderT = 99; Z2.wanderX = 0; Z2.wanderZ = 0;    // que se quede quieto y alineado
+  Z2.wakeUp = () => {};                                // …y que no se entere del jugador (blanco quieto)
   step(w, zm, P, hooks, 1, () => P.update(DT, idleInput(P), FWD, RGT));
   n = fireHitscan(w, ox, oy, oz, 0, 0, 1, WEAPONS.shotgun, P.body, rng, hits);
   let bodyHits = 0, total = 0;

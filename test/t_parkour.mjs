@@ -302,7 +302,7 @@ console.log('\n── horda ──');
   const Wk = zm.spawn('walker', -3, -13, 0, false, null, { hopper: false, parkour: false });
   run(w, 14, () => { PB.wantX = 0; PB.wantZ = 0; PB.wantSpeed = 0; zm.update(DT, player, hooks); });
   ok('el que pega saltitos brincó mientras corría', H.body.hops >= 1, `hops=${H.body.hops} (${H.traits.hopStyle})`);
-  ok('el de parkour cruzó el escritorio con un estilo de parkour, o se lanzó', /kong|dash|speed/.test(Pk.body.lastVault) || Pk.body.pounces >= 1 || Pk.body.lastJump === 'superman', `vault=${Pk.body.lastVault} pounces=${Pk.body.pounces} jump=${Pk.body.lastJump}`);
+  ok('el de parkour cruzó el escritorio con un estilo de parkour, o se lanzó', /kong|dash|speed/.test(Pk.body.lastVault) || Pk.body.pounces >= 1 || Pk.body.dives >= 1 || Pk.body.lastJump === 'superman', `vault=${Pk.body.lastVault} pounces=${Pk.body.pounces} planchas=${Pk.body.dives} jump=${Pk.body.lastJump}`);
   const kinds = Object.keys(hits);
   ok('llegaron ataques al jugador', kinds.length >= 1, kinds.join(','));
   ok('sin NaN', nanFree(w));

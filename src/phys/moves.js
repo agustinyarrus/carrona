@@ -720,7 +720,7 @@ P.dazedStand = (T) => {
 P.chargeLow = (T, s = 1) => {
   if (typeof s !== 'number') s = 1;
   const sx = s ? 1 : -1;
-  torso(T, 0, 0.86, 0, 0.55, sx * 0.12, sx * 0.35);
+  torso(T, 0, 0.82, 0, 0.58, sx * 0.12, sx * 0.35);
   leg(T, 0, -0.15, 0.062, 0.20, -0.2, 0, 1); leg(T, 1, 0.15, 0.062, -0.20, 0.2, 0, 1);
   arm(T, s, sx * 0.20, 0.95, 0.20, sx * 0.9, -0.4, -0.2);
   arm(T, s ? 0 : 1, -sx * 0.35, 0.85, -0.30, -sx * 0.7, 0.2, -0.7);
@@ -1659,6 +1659,9 @@ export const RUN_STYLES = [
   { name: 'backlean', lean: -0.08, armStyle: 'back',   strideMul: 1.10, bobMul: 1.2, headBack: 0.08 },
   { name: 'stiffleg', lean: 0.05, armStyle: 'zombie',  strideMul: 0.85, bobMul: 1.4, lift: 0.3 },
 ];
+/** El jugador: marcha neutra y firme (los brazos los pone el modo 'aim'). */
+export const PLAYER_RUN_STYLE = { name: 'player', lean: -0.02, armStyle: 'pump', strideMul: 1.0, bobMul: 0.8, lift: 1.1, jitter: 0 };
+export const PLAYER_WALK_STYLE = { name: 'player', lean: 0.0, armStyle: 'low', strideMul: 0.95, bobMul: 0.7, sway: 0.6, jitter: 0.05, lurch: 0, limp: 1, wobble: 0.3, headTilt: 0, dragLeg: 0 };
 export const WALK_STYLES = [
   { name: 'shamble',  lean: 0.03, hunch: 0.06, armStyle: 'reach', strideMul: 0.85, bobMul: 0.9, lurch: 0.5 },
   { name: 'drag',     lean: 0.04, hunch: 0.05, armStyle: 'reach', strideMul: 0.80, dragLeg: 1, limp: 0.5, lurch: 0.3 },

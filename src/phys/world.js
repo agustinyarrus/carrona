@@ -62,9 +62,12 @@ export class PhysWorld {
     this.crest = new Float32Array(MAX_C);
     this.ccomp = new Float32Array(MAX_C);  // compliance (m/N). 0 = rígido
     this.ctype = new Uint8Array(MAX_C);
+    this.cflag = new Uint8Array(MAX_C);   // bit 0: hueso rígido (se vuelve a proyectar al final del substep)
     this.calive = new Uint8Array(MAX_C);
     this.cn = 0;
     this.cDead = 0;
+    this.rigidIdx = new Int32Array(MAX_C);   // índices de las restricciones rígidas (la segunda pasada no barre todo)
+    this.rigidN = 0;
 
     // ── huesos (segmentos con radio: render + raycast) ──────────────────────
     this.bA = new Int32Array(MAX_B); this.bB = new Int32Array(MAX_B);
@@ -149,11 +152,12 @@ export class PhysWorld {
   setPos(i, x, y, z) { this.px[i] = x; this.py[i] = y; this.pz[i] = z; this.qx[i] = x; this.qy[i] = y; this.qz[i] = z; }
 
   // ═══ restricciones ════════════════════════════════════════════════════════
-  addConstraint(a, b, rest, compliance = 0, type = CT_DIST) {
+  addConstraint(a, b, rest, compliance = 0, type = CT_DIST, flag = 0) {
     if (this.cn >= MAX_C) return -1;
     const i = this.cn++;
     this.ca[i] = a; this.cb[i] = b; this.crest[i] = rest;
-    this.ccomp[i] = compliance; this.ctype[i] = type; this.calive[i] = 1;
+    this.ccomp[i] = compliance; this.ctype[i] = type; this.calive[i] = 1; this.cflag[i] = flag;
+    if (flag & 1) this.rigidIdx[this.rigidN++] = i;
     return i;
   }
   breakConstraint(i) { if (i >= 0 && this.calive[i]) { this.calive[i] = 0; this.cDead++; } }
@@ -239,7 +243,7 @@ export class PhysWorld {
   }
 
   reset() {
-    this.pn = 0; this.cn = 0; this.bn = 0;
+    this.pn = 0; this.cn = 0; this.bn = 0; this.rigidN = 0;
     this.pFree.length = 0; this.cDead = 0; this.bDead = 0;
     this.bodies.length = 0;
     this.pf.fill(0); this.calive.fill(0); this.balive.fill(0);
@@ -288,7 +292,7 @@ export class PhysWorld {
 
       for (let bi = 0; bi < this.bodies.length; bi++) {
         const b = this.bodies[bi];
-        if (b.solve) b.solve(h, this);
+        if (b.solve) b.solve(h, this, s);
       }
 
       // Las dos pasadas de colisión entre cuerpos se alternan por substep:
@@ -299,6 +303,9 @@ export class PhysWorld {
       this._solveWorld();
       this._solveBoneWorld();
       this._clampDepenetration(h);
+      // los huesos tienen la última palabra: un contacto o un límite articular
+      // no deja un hueso estirado al cerrar el substep
+      this._solveRigid(h, s === S - 1 ? 2 : 1);
 
       // — velocidad desde el desplazamiento real, sin ganar energía —
       const invH = 1 / h;
@@ -417,6 +424,41 @@ export class PhysWorld {
       const s = lam / d;
       px[a] -= dx * s * wa; py[a] -= dy * s * wa; pz[a] -= dz * s * wa;
       px[b] += dx * s * wb; py[b] += dy * s * wb; pz[b] += dz * s * wb;
+    }
+  }
+
+  // ── segunda pasada de huesos rígidos, al cierre del substep ─────────────
+  //  Con UNA iteración por substep, lo último que se resuelve gana. Los límites
+  //  articulares y los contactos corrían después del hueso y lo dejaban
+  //  estirado: en una multitud el cráneo de un cuerpo empujado quedaba al doble
+  //  de su largo, y un tiro de pistola estiraba el cuello un 37 %. Los huesos
+  //  marcados (`flag` 1 en addConstraint) se vuelven a proyectar acá: el
+  //  contacto sigue empujando, pero al miembro entero y repartido en varios
+  //  substeps, no a una punta sola.
+  _solveRigid(h, passes = 2) {
+    const px = this.px, py = this.py, pz = this.pz, iw = this.iw, cflag = this.cflag;
+    const h2 = h * h;
+    // dos barridos al cerrar el frame (cuello y cráneo, o pelvis y cadera, se
+    // pisan entre sí en uno solo cuando la cabeza fue empujada de costado); en
+    // los substeps intermedios alcanza con uno
+    const idx = this.rigidIdx, n = this.rigidN;
+    for (let pass = 0; pass < passes; pass++) {
+      for (let k = 0; k < n; k++) {
+        const i = idx[k];
+        if (!this.calive[i] || !(cflag[i] & 1)) continue;
+        const a = this.ca[i], b = this.cb[i];
+        const wa = iw[a], wb = iw[b];
+        const w = wa + wb;
+        if (w === 0) continue;
+        const dx = px[b] - px[a], dy = py[b] - py[a], dz = pz[b] - pz[a];
+        const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (d < 1e-7) continue;
+        const C = d - this.crest[i];
+        const lam = -C / (w + this.ccomp[i] / h2);
+        const s = lam / d;
+        px[a] -= dx * s * wa; py[a] -= dy * s * wa; pz[a] -= dz * s * wa;
+        px[b] += dx * s * wb; py[b] += dy * s * wb; pz[b] += dz * s * wb;
+      }
     }
   }
 
@@ -748,13 +790,17 @@ export class PhysWorld {
       if (w !== i) {
         this.ca[w] = this.ca[i]; this.cb[w] = this.cb[i];
         this.crest[w] = this.crest[i]; this.ccomp[w] = this.ccomp[i];
-        this.ctype[w] = this.ctype[i]; this.calive[w] = 1;
+        this.ctype[w] = this.ctype[i]; this.calive[w] = 1; this.cflag[w] = this.cflag[i];
         map.set(i, w);
       }
       w++;
     }
     for (let i = w; i < this.cn; i++) this.calive[i] = 0;
     this.cn = w; this.cDead = 0;
+    // la lista de rígidas se rearma con los índices nuevos
+    let rn = 0;
+    for (let i = 0; i < this.cn; i++) if (this.cflag[i] & 1) this.rigidIdx[rn++] = i;
+    this.rigidN = rn;
     if (map.size) for (const b of this.bodies) if (b.remapConstraints) b.remapConstraints(map);
   }
   _compactBones() {
