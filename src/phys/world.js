@@ -35,6 +35,18 @@ export const PF_GROUND = 1 << 1;  // tocó piso este substep
 export const PF_NOCOLL = 1 << 2;  // ignora colisión partícula-partícula
 export const PF_HIT    = 1 << 3;  // tocó cualquier cosa este substep
 
+// lo que devuelve _collidePoint (un entero: no asigna nada)
+const CP_HIT    = 1 << 0;   // tocó algo
+const CP_GROUND = 1 << 1;   // y está apoyado encima
+
+// consultas de vecinos en la grilla: cuántas celdas distintas se recuerdan por consulta (las siguientes no se
+// deduplican: así fue siempre, con una lista de 32) y cada cuántas consultas el sello da la vuelta
+const CELDAS_REGISTRADAS = 32;
+const SELLO_MAX = 1 << 30;
+// holgura de la caja del hueso: una partícula a más de su radio + el del hueso + esto, en algún eje, no puede
+// tocar el segmento (el error de redondeo de la distancia es ~1e-16 m: 1 µm sobra para no cambiar ni un bit)
+const HOLGURA_CAJA = 1e-6;
+
 /** Hash espacial de 3 enteros → balde. Math.imul para que sea entero de 32 bits. */
 function cellHash(gx, gy, gz) {
   return (Math.imul(gx, 92837111) ^ Math.imul(gy, 689287499) ^ Math.imul(gz, 283923481)) & HASH_MASK;
@@ -121,7 +133,15 @@ export class PhysWorld {
     this.hItems = new Int32Array(MAX_P);
     this.hKeys = new Int32Array(MAX_P);
     this.hCursor = new Int32Array(HASH_SIZE);
-    this._seen = new Int32Array(32);
+    // baldes ya visitados en la consulta de vecinos en curso: un sello por consulta en vez de comparar cada
+    // celda contra la lista de las anteriores (O(1) por celda, no O(celdas); un hueso cubre hasta 27)
+    this._visto = new Int32Array(HASH_SIZE);
+    this._sello = 0;
+    this._registradas = 0;
+    // Entrada y salida de _collidePoint: [x, y, z, r | x, y, z, kx, ky, kz, gm], un solo Float64Array reusado.
+    // Pasarle dobles como ARGUMENTOS a una función que V8 no inlinea los encajona uno por uno (4 HeapNumbers
+    // por llamada, ~8.700 llamadas por frame con 40 cuerpos: ~550 KB de basura por frame, un GC cada 3).
+    this._cp = new Float64Array(11);
 
     this.bodies = [];
     this.stats = { particles: 0, constraints: 0, bones: 0, pairs: 0 };
@@ -440,25 +460,28 @@ export class PhysWorld {
   //  contacto sigue empujando, pero al miembro entero y repartido en varios
   //  substeps, no a una punta sola.
   _solveRigid(h, passes = 2) {
-    const px = this.px, py = this.py, pz = this.pz, iw = this.iw, cflag = this.cflag;
+    const px = this.px, py = this.py, pz = this.pz, iw = this.iw;
+    const calive = this.calive, ca = this.ca, cb = this.cb, crest = this.crest, ccomp = this.ccomp;
     const h2 = h * h;
     // dos barridos al cerrar el frame (cuello y cráneo, o pelvis y cadera, se
     // pisan entre sí en uno solo cuando la cabeza fue empujada de costado); en
-    // los substeps intermedios alcanza con uno
+    // los substeps intermedios alcanza con uno. `rigidIdx` sólo tiene
+    // restricciones con el bit rígido (addConstraint y la compactación la
+    // arman así): alcanza con saltear las rotas. O(rígidas × pasadas).
     const idx = this.rigidIdx, n = this.rigidN;
     for (let pass = 0; pass < passes; pass++) {
       for (let k = 0; k < n; k++) {
         const i = idx[k];
-        if (!this.calive[i] || !(cflag[i] & 1)) continue;
-        const a = this.ca[i], b = this.cb[i];
+        if (!calive[i]) continue;
+        const a = ca[i], b = cb[i];
         const wa = iw[a], wb = iw[b];
         const w = wa + wb;
         if (w === 0) continue;
         const dx = px[b] - px[a], dy = py[b] - py[a], dz = pz[b] - pz[a];
         const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
         if (d < 1e-7) continue;
-        const C = d - this.crest[i];
-        const lam = -C / (w + this.ccomp[i] / h2);
+        const C = d - crest[i];
+        const lam = -C / (w + ccomp[i] / h2);
         const s = lam / d;
         px[a] -= dx * s * wa; py[a] -= dy * s * wa; pz[a] -= dz * s * wa;
         px[b] += dx * s * wb; py[b] += dy * s * wb; pz[b] += dz * s * wb;
@@ -486,6 +509,23 @@ export class PhysWorld {
     }
   }
 
+  /** Empieza una consulta de vecinos: sello nuevo (cada 2^30 consultas, el arreglo vuelve a cero). O(1). */
+  _nuevaConsulta() {
+    if (++this._sello >= SELLO_MAX) { this._visto.fill(0); this._sello = 1; }
+    this._registradas = 0;
+  }
+
+  /**
+   * ¿El balde k no se visitó todavía en esta consulta? (dos celdas distintas pueden caer en el mismo balde).
+   * Recuerda sólo las primeras CELDAS_REGISTRADAS distintas, igual que la lista de antes. O(1).
+   */
+  _celdaNueva(k) {
+    const visto = this._visto;
+    if (visto[k] === this._sello) return false;
+    if (this._registradas < CELDAS_REGISTRADAS) { visto[k] = this._sello; this._registradas++; }
+    return true;
+  }
+
   _solveParticleCollisions() {
     const inv = 1 / this.cell;
     const cc = this.hCount, items = this.hItems;
@@ -493,7 +533,6 @@ export class PhysWorld {
     const kx = this.kx, ky = this.ky, kz = this.kz;
     const iw = this.iw, pr = this.pr, pg = this.pg;
     const reach = this.maxRadius;
-    const seen = this._seen;
     let pairs = 0;
 
     for (let i = 0; i < this.pn; i++) {
@@ -504,16 +543,12 @@ export class PhysWorld {
       const x0 = Math.floor((xi - rr0) * inv), x1 = Math.floor((xi + rr0) * inv);
       const y0 = Math.floor((yi - rr0) * inv), y1 = Math.floor((yi + rr0) * inv);
       const z0 = Math.floor((zi - rr0) * inv), z1 = Math.floor((zi + rr0) * inv);
-      let nseen = 0;
+      this._nuevaConsulta();
       for (let gy = y0; gy <= y1; gy++) {
         for (let gz = z0; gz <= z1; gz++) {
           for (let gx = x0; gx <= x1; gx++) {
             const k = cellHash(gx, gy, gz);
-            // dos celdas distintas pueden caer en el mismo balde: no repetir
-            let dup = false;
-            for (let q = 0; q < nseen; q++) if (seen[q] === k) { dup = true; break; }
-            if (dup) continue;
-            if (nseen < seen.length) seen[nseen++] = k;
+            if (!this._celdaNueva(k)) continue;
             const s0 = cc[k], s1 = cc[k + 1];
             for (let n = s0; n < s1; n++) {
               const j = items[n];
@@ -556,7 +591,6 @@ export class PhysWorld {
     const px = this.px, py = this.py, pz = this.pz;
     const kx = this.kx, ky = this.ky, kz = this.kz;
     const iw = this.iw, pr = this.pr, pg = this.pg, pf = this.pf;
-    const seen = this._seen;
     const reachP = this.maxRadius;
     for (let i = 0; i < this.bn; i++) {
       if (!this.balive[i]) continue;
@@ -581,19 +615,26 @@ export class PhysWorld {
       const x0 = Math.floor(((ax < bx ? ax : bx) - rr0) * inv), x1 = Math.floor(((ax > bx ? ax : bx) + rr0) * inv);
       const y0 = Math.floor(((ay < by ? ay : by) - rr0) * inv), y1 = Math.floor(((ay > by ? ay : by) + rr0) * inv);
       const z0 = Math.floor(((az < bz ? az : bz) - rr0) * inv), z1 = Math.floor(((az > bz ? az : bz) + rr0) * inv);
-      let nseen = 0;
+      // caja del segmento (con los extremos del inicio, los mismos que usa la proyección de abajo)
+      const mnx = ax < bx ? ax : bx, mxx = ax > bx ? ax : bx;
+      const mny = ay < by ? ay : by, mxy = ay > by ? ay : by;
+      const mnz = az < bz ? az : bz, mxz = az > bz ? az : bz;
+      this._nuevaConsulta();
       for (let gy = y0; gy <= y1; gy++) {
         for (let gz = z0; gz <= z1; gz++) {
           for (let gx = x0; gx <= x1; gx++) {
             const k = cellHash(gx, gy, gz);
-            let dup = false;
-            for (let q = 0; q < nseen; q++) if (seen[q] === k) { dup = true; break; }
-            if (dup) continue;
-            if (nseen < seen.length) seen[nseen++] = k;
+            if (!this._celdaNueva(k)) continue;
             const s0 = cc[k], s1 = cc[k + 1];
             for (let n = s0; n < s1; n++) {
               const j = items[n];
               if (pg[j] === ga) continue;
+              // descarte temprano: fuera de la caja del segmento agrandada por los dos radios (y 1 µm) la
+              // distancia de abajo da ≥ rr seguro, y ese candidato se salteaba igual: el resultado no cambia
+              const rrE = r + pr[j] + HOLGURA_CAJA;
+              const qx = px[j]; if (qx < mnx - rrE || qx > mxx + rrE) continue;
+              const qy = py[j]; if (qy < mny - rrE || qy > mxy + rrE) continue;
+              const qz = pz[j]; if (qz < mnz - rrE || qz > mxz + rrE) continue;
               // punto del segmento más cercano a la partícula (sin los extremos:
               // de eso ya se ocupan las partículas del propio hueso)
               const wx = px[j] - ax, wy = py[j] - ay, wz = pz[j] - az;
@@ -636,10 +677,14 @@ export class PhysWorld {
   }
 
   // ── colisión de UN punto (radio r) contra piso, cajas y cilindros ────────
-  //  Escribe en `o` la posición corregida, la corrección acumulada (k*), si
-  //  tocó algo, si está apoyado sobre algo y con qué profundidad (gm, para la
-  //  fricción). La usan las partículas y también el punto medio de cada hueso.
-  _collidePoint(x, y, z, r, o) {
+  //  Lee el punto de `_cp[0..3]` (x, y, z, r) y deja en `_cp[4..10]` la posición
+  //  corregida, la corrección acumulada (k*) y con qué profundidad está apoyado
+  //  (gm, para la fricción). Devuelve CP_HIT si tocó algo, más CP_GROUND si está
+  //  apoyado sobre algo. La usan las partículas y el punto medio de cada hueso.
+  _collidePoint() {
+    const cp = this._cp;
+    let x = cp[0], y = cp[1], z = cp[2];
+    const r = cp[3];
     const boxes = this.boxes, cyls = this.cyls, nbox = boxes.length;
     const gY = this.groundY, ghx = this.groundHX, ghz = this.groundHZ;
     let kx = 0, ky = 0, kz = 0, hit = false, ground = false, gm = 0;
@@ -712,32 +757,33 @@ export class PhysWorld {
         }
       }
     }
-    o.x = x; o.y = y; o.z = z; o.kx = kx; o.ky = ky; o.kz = kz;
-    o.hit = hit; o.ground = ground; o.gm = gm;
+    cp[4] = x; cp[5] = y; cp[6] = z; cp[7] = kx; cp[8] = ky; cp[9] = kz; cp[10] = gm;
+    return (hit ? CP_HIT : 0) | (ground ? CP_GROUND : 0);
   }
 
   // ── partículas contra el mundo, con fricción posicional ─────────────────
   _solveWorld() {
-    const o = this._co || (this._co = { x: 0, y: 0, z: 0, kx: 0, ky: 0, kz: 0, hit: false, ground: false, gm: 0 });
+    const cp = this._cp;
     const px = this.px, py = this.py, pz = this.pz, qx = this.qx, qz = this.qz;
     const muS = this.frictionS, muD = this.frictionD, vSl = this.frictionVt, pOwner = this.pOwner;
     for (let i = 0; i < this.pn; i++) {
       if (!(this.pf[i] & PF_ALIVE) || this.iw[i] === 0) continue;
-      this._collidePoint(px[i], py[i], pz[i], this.pr[i], o);
-      if (!o.hit) continue;
-      let x = o.x, z = o.z;
-      this.kx[i] += o.kx; this.ky[i] += o.ky; this.kz[i] += o.kz;
+      cp[0] = px[i]; cp[1] = py[i]; cp[2] = pz[i]; cp[3] = this.pr[i];
+      const toque = this._collidePoint();
+      if (!(toque & CP_HIT)) continue;
+      let x = cp[4], z = cp[6];
+      this.kx[i] += cp[7]; this.ky[i] += cp[8]; this.kz[i] += cp[9];
       this.pf[i] |= PF_HIT;
-      if (o.ground) {
+      if (toque & CP_GROUND) {
         this.pf[i] |= PF_GROUND;
         const tx = x - qx[i], tz = z - qz[i];
         const tl = Math.sqrt(tx * tx + tz * tz);
         // fricción estática (un pie plantado agarra, un cuerpo que se desploma no se
         // desparrama); dinámica, menor, si el CUERPO entero ya va deslizando rápido
         // (un cuerpo que cae corriendo resbala por el piso en vez de clavarse donde tocó)
-        if (tl > 1e-6) { const own = pOwner[i]; const mu = own && own.slideV > vSl ? muD : muS; const f = Math.min(1, mu * o.gm / tl); x -= tx * f; z -= tz * f; }
+        if (tl > 1e-6) { const own = pOwner[i]; const mu = own && own.slideV > vSl ? muD : muS; const f = Math.min(1, mu * cp[10] / tl); x -= tx * f; z -= tz * f; }
       }
-      px[i] = x; py[i] = o.y; pz[i] = z;
+      px[i] = x; py[i] = cp[5]; pz[i] = z;
     }
   }
 
@@ -748,7 +794,7 @@ export class PhysWorld {
   //  verdad y un zombi que se estrella contra una pared la siente en todo el
   //  brazo, no sólo en la mano.
   _solveBoneWorld() {
-    const o = this._co2 || (this._co2 = { x: 0, y: 0, z: 0, kx: 0, ky: 0, kz: 0, hit: false, ground: false, gm: 0 });
+    const cp = this._cp;
     const px = this.px, py = this.py, pz = this.pz, qx = this.qx, qz = this.qz;
     const iw = this.iw, pf = this.pf, muS = this.frictionS, muD = this.frictionD, vSl = this.frictionVt;
     for (let i = 0; i < this.bn; i++) {
@@ -760,13 +806,15 @@ export class PhysWorld {
       const wa = iw[a], wb = iw[b], w = wa + wb;
       if (w === 0) continue;
       const mx = (px[a] + px[b]) * 0.5, my = (py[a] + py[b]) * 0.5, mz = (pz[a] + pz[b]) * 0.5;
-      this._collidePoint(mx, my, mz, this.br[i] * 0.85, o);
-      if (!o.hit) continue;
-      let cx = o.kx, cy = o.ky, cz = o.kz;
-      if (o.ground) {
+      cp[0] = mx; cp[1] = my; cp[2] = mz; cp[3] = this.br[i] * 0.85;
+      const toque = this._collidePoint();
+      if (!(toque & CP_HIT)) continue;
+      const apoyado = (toque & CP_GROUND) !== 0;
+      let cx = cp[7], cy = cp[8], cz = cp[9];
+      if (apoyado) {
         const tx = (mx + cx) - (qx[a] + qx[b]) * 0.5, tz = (mz + cz) - (qz[a] + qz[b]) * 0.5;
         const tl = Math.sqrt(tx * tx + tz * tz);
-        if (tl > 1e-6) { const mu = body && body.slideV > vSl ? muD : muS; const f = Math.min(1, mu * o.gm / tl); cx -= tx * f; cz -= tz * f; }
+        if (tl > 1e-6) { const mu = body && body.slideV > vSl ? muD : muS; const f = Math.min(1, mu * cp[10] / tl); cx -= tx * f; cz -= tz * f; }
       }
       // mover cada extremo el doble de su fracción de masa: el punto medio se
       // desplaza exactamente la corrección
@@ -774,12 +822,12 @@ export class PhysWorld {
       if (fa > 0) {
         px[a] += cx * fa; py[a] += cy * fa; pz[a] += cz * fa;
         this.kx[a] += cx * fa; this.ky[a] += cy * fa; this.kz[a] += cz * fa;
-        pf[a] |= PF_HIT; if (o.ground) pf[a] |= PF_GROUND;
+        pf[a] |= PF_HIT; if (apoyado) pf[a] |= PF_GROUND;
       }
       if (fb > 0) {
         px[b] += cx * fb; py[b] += cy * fb; pz[b] += cz * fb;
         this.kx[b] += cx * fb; this.ky[b] += cy * fb; this.kz[b] += cz * fb;
-        pf[b] |= PF_HIT; if (o.ground) pf[b] |= PF_GROUND;
+        pf[b] |= PF_HIT; if (apoyado) pf[b] |= PF_GROUND;
       }
     }
   }

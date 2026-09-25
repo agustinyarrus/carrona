@@ -49,6 +49,18 @@ const PRAD = new Float32Array([0.130, 0.075, 0.155, 0.095, 0.095, 0.070, 0.070, 
 // rigidez relativa del músculo por partícula (el torso manda, las manos flotan)
 const MUS = new Float32Array([0.85, 0.95, 1.00, 0.90, 0.90, 0.55, 0.55, 0.40, 0.40, 1.00, 0.95, 0.95, 0.75, 0.75, 0.85, 0.85]);
 
+// ── grupos de partículas que se recorren en cada frame ─────────────────────────
+//  Constantes del módulo y lazos por índice: `for (const i of [..])` arma un arreglo y un iterador en CADA
+//  llamada, y update/_syncTarget (enormes) pasan buena parte del tiempo en el tier base de V8, donde eso es
+//  basura de verdad. El orden de recorrido es el mismo de antes, así que las cuentas dan idénticas al bit.
+const TRONCO = Object.freeze([HIP, HPL, HPR, CHEST, NECK, HEAD, SHL, SHR]);   // lo que sube y baja con la pelvis
+const PIES_Y_RODILLAS = Object.freeze([FTL, FTR, KNL, KNR]);
+const PIES = Object.freeze([FTL, FTR]);
+const MANOS = Object.freeze([HAL, HAR]), CODOS = Object.freeze([ELL, ELR]);
+const PIERNAS = Object.freeze([HPL, HPR, KNL, KNR, FTL, FTR]);
+const BRAZOS = Object.freeze([ELL, ELR, HAL, HAR]);
+const INCLINA_I = Object.freeze([CHEST, NECK, HEAD, SHL, SHR]), INCLINA_F = Object.freeze([0.5, 0.8, 1.1, 0.6, 0.6]);
+
 // ── huesos: [a, b, radio de render/impacto, hp, zona] ────────────────────────
 //  zona: 0 cabeza · 1 torso · 2 brazo · 3 pierna
 export const B_SKULL = 0, B_NECK = 1, B_SPINE = 2, B_CLAVL = 3, B_CLAVR = 4,
@@ -267,6 +279,16 @@ export class Ragdoll {
     this.lookX = 0; this.lookZ = 0;
     this.threatX = 0; this.threatZ = 0; this.threatT = 0;   // de dónde vino el último golpe (la cabeza mira ahí un segundo)
     this.slideV = 0; this.slideT = 0;   // velocidad horizontal de la cadera; tiempo desde que deslizó rápido
+    // Todo lo que se escribe recién en update (o en el balance, o en los brazos) NACE ACÁ, en este orden y con
+    // el valor «vacío» que se leía antes: undefined donde el código pregunta `!== undefined` o `??`, 0 donde
+    // lee `|| 0`, null en los cachés perezosos. Si un campo aparece más tarde, cada cuerpo pasa por una cadena
+    // de clases ocultas de V8 distinta según el camino que tomó, y los accesos `this.x` de los métodos calientes
+    // dejan de ser monomórficos para siempre.
+    this.floorY = undefined; this.yawRate = 0; this.rootBlocked = false; this._prevYaw = undefined;
+    this._cmx = undefined; this._cmz = undefined; this._tcx = undefined; this._tcz = undefined;
+    this._tcxPrev = undefined; this._tczPrev = undefined;
+    this.balFrames = 0; this.balErr = 0; this.balLag = 0; this.balDv = 0;
+    this._armMix = null; this._armL2 = 0; this._restLen = null;
     this.braceArms = 0;                 // reflejo de caída activo: multiplicador de fuerza de los brazos
     this.brace = 0;
     this.vault = null; this.autoVault = !this.isPlayer; this.vaults = 0;
@@ -804,8 +826,8 @@ export class Ragdoll {
     //   (trepando o saltando los pies tocan cosas a propósito: ahí no se evalúa)
     if (this.canTrip && this.wantSpeed > 0.5 && this.upright && control && !stumbling && !this.crawling && !this.vault && this.landT > 0.25) {
       let contact = false;
-      for (const i of [FTL, FTR, KNL, KNR]) {
-        const f = w.pf[this.p[i]];
+      for (let k = 0; k < PIES_Y_RODILLAS.length; k++) {
+        const f = w.pf[this.p[PIES_Y_RODILLAS[k]]];
         if ((f & PF_HIT) && !(f & PF_GROUND)) { contact = true; break; }
       }
       let lag = 0;
@@ -813,7 +835,8 @@ export class Ragdoll {
         const c0 = Math.cos(this.yaw), s0 = Math.sin(this.yaw);
         const T = this.target;
         const baseY = this.groundY > -900 ? this.groundY : 0;
-        for (const f of [FTL, FTR]) {
+        for (let k = 0; k < PIES.length; k++) {
+          const f = PIES[k];
           const lx = T[f * 3] - T[HIP * 3], lz = T[f * 3 + 2] - T[HIP * 3 + 2];
           const tx = this.rootX + lx * c0 + lz * s0, tz = this.rootZ - lx * s0 + lz * c0;
           const ty = baseY + T[f * 3 + 1];
@@ -1350,7 +1373,7 @@ export class Ragdoll {
       crouch = Math.max(crouch, load) - ext;
     }
     if (crouch !== 0) {
-      for (const i of [HIP, HPL, HPR, CHEST, NECK, HEAD, SHL, SHR]) T[i * 3 + 1] -= crouch;
+      for (let k = 0; k < TRONCO.length; k++) T[TRONCO[k] * 3 + 1] -= crouch;
       if (crouch > 0) { T[CHEST * 3 + 2] += crouch * 0.45; T[NECK * 3 + 2] += crouch * 0.6; T[HEAD * 3 + 2] += crouch * 0.7; }
     }
     // aterrizando el tronco se va adelante y la cabeza baja (el peso cae encima de las rodillas)
@@ -1451,7 +1474,7 @@ export class Ragdoll {
         if (need > drop) drop = need;
       }
       drop = Math.min(drop, 0.10 * S);
-      if (drop > 0) for (const i of [HIP, HPL, HPR, CHEST, NECK, HEAD, SHL, SHR]) T[i * 3 + 1] -= drop;
+      if (drop > 0) for (let k = 0; k < TRONCO.length; k++) T[TRONCO[k] * 3 + 1] -= drop;
       // — pie PLANTADO: mientras un pie está en apoyo su objetivo se congela en
       //   el MUNDO. El objetivo local se calcula una vez por cuadro pero la raíz
       //   avanza por substep: el pie apoyado se iba 6 cm adelante en el cuadro y
@@ -1527,7 +1550,7 @@ export class Ragdoll {
     if (buckle > 0) {
       const cr = clamp01(buckle / 0.25) * 0.24 * S;
       const sideX = (this.legBuckle[1] > this.legBuckle[0] ? 1 : -1) * cr * 0.35;
-      for (const i of [HIP, HPL, HPR, CHEST, NECK, HEAD, SHL, SHR]) { T[i * 3 + 1] -= cr; T[i * 3] += sideX; }
+      for (let k = 0; k < TRONCO.length; k++) { const i = TRONCO[k]; T[i * 3 + 1] -= cr; T[i * 3] += sideX; }
       T[HEAD * 3 + 2] += cr * 0.5; T[CHEST * 3 + 2] += cr * 0.3;   // se va un poco hacia adelante
     }
 
@@ -1609,7 +1632,7 @@ export class Ragdoll {
     const hb = this._sp('headBack') * S;
     if (hb) { T[HEAD * 3 + 1] += hb * 0.3; T[HEAD * 3 + 2] -= hb; T[NECK * 3 + 2] -= hb * 0.4; T[CHEST * 3 + 2] -= hb * 0.15; }
     const bnc = this._sp('bounce') * S * moving * (0.5 - 0.5 * Math.cos(ph * 2));
-    if (bnc) for (const i of [HIP, HPL, HPR, CHEST, NECK, HEAD, SHL, SHR]) T[i * 3 + 1] += bnc;
+    if (bnc) for (let k = 0; k < TRONCO.length; k++) T[TRONCO[k] * 3 + 1] += bnc;
     const shd = this._sp('shoulder') * S;
     if (shd) { T[SHR * 3 + 2] += shd; T[SHL * 3 + 2] -= shd * 0.5; }
     T[HEAD * 3] += P.headTilt * 0.10 * S + Math.sin(ph * 0.7) * 0.02 * P.headBob * S;
@@ -1639,13 +1662,14 @@ export class Ragdoll {
     // lanzan adelante y arriba (el envión de los brazos es parte del salto)
     if (prepK > 0) {
       const e = prepK * (1 - driveK) * 0.24 * S, f = driveK * 0.30 * S;
-      for (const [ha, el] of [[HAL, ELL], [HAR, ELR]]) {
+      for (let k = 0; k < 2; k++) {
+        const ha = MANOS[k], el = CODOS[k];
         T[ha * 3 + 2] += -e + f * 1.2; T[ha * 3 + 1] += -e * 0.4 + f * 1.3;
         T[el * 3 + 2] += -e * 0.5 + f * 0.5; T[el * 3 + 1] += f * 0.5;
       }
     }
     // aterrizando los brazos salen adelante y arriba a equilibrar
-    if (lenv > 0) { const e = lenv * S; for (const [ha, el] of [[HAL, ELL], [HAR, ELR]]) { T[ha * 3 + 2] += e * 0.45; T[ha * 3 + 1] += e * 0.30; T[el * 3 + 2] += e * 0.2; T[el * 3 + 1] += e * 0.1; } }
+    if (lenv > 0) { const e = lenv * S; for (let k = 0; k < 2; k++) { const ha = MANOS[k], el = CODOS[k]; T[ha * 3 + 2] += e * 0.45; T[ha * 3 + 1] += e * 0.30; T[el * 3 + 2] += e * 0.2; T[el * 3 + 1] += e * 0.1; } }
     // — EQUILIBRIO: cuanto más se va el punto de captura, más salen los brazos y más
     //   se echa el tronco en contra. Yéndose hacia atrás los brazos vuelan adelante y
     //   arriba (molinete); hacia adelante van afuera y abajo a frenar; de costado sale
@@ -1655,7 +1679,8 @@ export class Ragdoll {
       if (bm > 0.02) {
         if (this.styledArms) {
           const back = Math.max(0, -bA), fwd = Math.max(0, bA);
-          for (const [ha, el, sgn] of [[HAL, ELL, -1], [HAR, ELR, 1]]) {
+          for (let k = 0; k < 2; k++) {
+            const ha = MANOS[k], el = CODOS[k], sgn = k ? 1 : -1;
             T[ha * 3] += (sgn * 0.28 * bm + bL * 0.18) * S; T[ha * 3 + 1] += (0.34 * back + 0.10 * fwd + 0.22 * Math.abs(bL)) * S; T[ha * 3 + 2] += (0.40 * back - 0.18 * fwd) * S;
             T[el * 3] += sgn * 0.14 * bm * S; T[el * 3 + 1] += (0.18 * back + 0.08 * Math.abs(bL)) * S; T[el * 3 + 2] += (0.16 * back - 0.06 * fwd) * S;
           }
@@ -1717,13 +1742,13 @@ export class Ragdoll {
     }
     // inclinación por velocidad vertical: + adelante subiendo, se endereza y abre cayendo
     const pitch = clamp(vy / v0, -1, 1) * 0.10 * V.lean;
-    for (const [i, f] of [[CHEST, 0.5], [NECK, 0.8], [HEAD, 1.1], [SHL, 0.6], [SHR, 0.6]]) { U[i * 3 + 2] += pitch * f; U[i * 3 + 1] -= Math.abs(pitch) * f * 0.25; }
+    for (let k = 0; k < INCLINA_I.length; k++) { const i = INCLINA_I[k], f = INCLINA_F[k]; U[i * 3 + 2] += pitch * f; U[i * 3 + 1] -= Math.abs(pitch) * f * 0.25; }
     // preparar el aterrizaje: piernas al piso, rodillas listas, brazos abiertos, mirada abajo
     if (landing > 0) {
       const L = this._tB; POSES.land(L, 0.28);
       const k = landing * 0.75;
-      for (const i of [HPL, HPR, KNL, KNR, FTL, FTR]) for (let a = 0; a < 3; a++) U[i * 3 + a] += (L[i * 3 + a] - U[i * 3 + a]) * k;
-      for (const i of [ELL, ELR, HAL, HAR]) for (let a = 0; a < 3; a++) U[i * 3 + a] += (L[i * 3 + a] - U[i * 3 + a]) * k * 0.6;
+      for (let n = 0; n < PIERNAS.length; n++) { const i = PIERNAS[n]; for (let a = 0; a < 3; a++) U[i * 3 + a] += (L[i * 3 + a] - U[i * 3 + a]) * k; }
+      for (let n = 0; n < BRAZOS.length; n++) { const i = BRAZOS[n]; for (let a = 0; a < 3; a++) U[i * 3 + a] += (L[i * 3 + a] - U[i * 3 + a]) * k * 0.6; }
       U[HEAD * 3 + 1] -= landing * 0.05; U[HEAD * 3 + 2] += landing * 0.06;
     }
     for (let i = 0; i < NP * 3; i++) T[i] = U[i] * sc;
