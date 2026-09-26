@@ -1,0 +1,21 @@
+{
+  "name": "carrona-mobile",
+  "private": true,
+  "version": "2.1.0",
+  "description": "CARRONA para Android: el juego web empaquetado con Capacitor (el juego en sí no tiene dependencias; esto es sólo el envoltorio)",
+  "scripts": {
+    "apk": "node ../tools/apk.mjs",
+    "apk:release": "node ../tools/apk.mjs --release",
+    "run": "node ../tools/apk.mjs --install --run",
+    "sync": "npx cap sync android",
+    "assets": "npx capacitor-assets generate --android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.2.1",
+    "@capacitor/cli": "^6.2.1",
+    "@capacitor/core": "^6.2.1"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^3.0.5"
+  }
+}

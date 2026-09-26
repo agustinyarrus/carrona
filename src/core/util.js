@@ -16,6 +16,22 @@ export const sign = Math.sign;
 /** Interpolación independiente del framerate. `l` = fracción restante por segundo. */
 export const damp = (a, b, l, dt) => lerp(a, b, 1 - Math.pow(l, dt));
 
+// ── el paso de simulación ─────────────────────────────────────────────────────
+/**
+ * La simulación nunca da pasos de más de SIM.step (la ragdoll XPBD está afinada para eso):
+ * si el cuadro tardó más, se parte en pasos iguales y el juego sigue a tiempo real en vez de
+ * ir en cámara lenta (un teléfono a 25 fps con el dt capado a 1/30 corría al 80 %, y al 100 %
+ * cuando repuntaba: «se mueve lento y rápido»). Con más de SIM.maxSteps por cuadro (menos de
+ * 10 fps) se resigna a ir más lento antes que entrar en espiral.
+ */
+export const SIM = Object.freeze({ step: 1 / 30, maxSteps: 3 });
+/** @returns {{ n: number, h: number }} cuántos pasos y de qué tamaño. O(1). */
+export function splitStep(dt, step = SIM.step, maxSteps = SIM.maxSteps) {
+  if (!(dt > 0)) return { n: 1, h: 0 };
+  const n = Math.min(maxSteps, Math.max(1, Math.ceil(dt / step - 1e-9)));
+  return { n, h: dt / n };
+}
+
 /** Diferencia angular más corta, en (-PI, PI]. */
 export function angDelta(a, b) {
   let d = (b - a) % TAU;

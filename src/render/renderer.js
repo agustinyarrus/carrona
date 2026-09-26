@@ -25,12 +25,37 @@ import { clamp, clamp01, damp, noise2, TAU } from '../core/util.js';
 //  Medido en una Iris Xe a 1686x906: "bajo" 60 fps, dpr 1.0 + MSAA 4 → 32 fps.
 //  Por eso "medio" baja un poco la resolución y usa MSAA 2; el juego además
 //  baja solo de calidad si los fps no llegan (ver Game.update).
+//  "movil": en un teléfono los px CSS ya vienen multiplicados (dpr 2,5–3,5), así que el preset
+//  no se define por dpr sino por ANCHO de render en píxeles de dispositivo (maxWidth): 1100 px
+//  en cualquier pantalla, que es lo que una GPU de teléfono mueve con bloom y sombras.
+//  "minimo": el piso para GPUs de teléfono chicas (una Mali-G57 dibujaba "movil" a 35 fps):
+//  900 px de ancho, sin bloom y mapas de sombra chicos. Conserva las sombras a propósito: apagarlas
+//  cambia los programas y recompila TODOS los materiales (segundos congelado en un teléfono), y la
+//  calidad adaptativa cae acá en medio de la partida. La caída pasa antes por la resolución
+//  dinámica (RENDER_SCALES); sombras sí/no queda como decisión del usuario.
 export const QUALITY = {
+  minimo: { dpr: 1.0, msaa: 0, moonMap: 512, flashMap: 256, bloom: 0, shadows: true, maxWidth: 900 },
+  movil: { dpr: 1.25, msaa: 0, moonMap: 1024, flashMap: 512,  bloom: 0.5, shadows: true, maxWidth: 1100 },
   bajo:  { dpr: 0.70, msaa: 0, moonMap: 1024, flashMap: 512,  bloom: 0.5, shadows: true },
   medio: { dpr: 0.90, msaa: 2, moonMap: 2048, flashMap: 1024, bloom: 0.5, shadows: true },
   alto:  { dpr: 1.25, msaa: 4, moonMap: 4096, flashMap: 2048, bloom: 0.5, shadows: true },
 };
-export const QUALITY_ORDER = ['bajo', 'medio', 'alto'];
+export const QUALITY_ORDER = ['minimo', 'movil', 'bajo', 'medio', 'alto'];
+
+/** Escalas de resolución que la calidad adaptativa recorre antes de bajar de preset (menos de 0,7 se ve borroso). */
+export const RENDER_SCALES = Object.freeze([1, 0.85, 0.7]);
+/**
+ * Un escalón menos: primero baja la resolución de render (RENDER_SCALES), después el preset
+ * (QUALITY_ORDER; setQuality vuelve la resolución a 1). Pura: dice qué cambiar, o {} si ya está
+ * en el piso. O(1).
+ */
+export function adaptiveStepDown(qualityName, renderScale = 1) {
+  const si = Math.max(0, RENDER_SCALES.findIndex((s) => s <= renderScale + 1e-6));
+  const next = RENDER_SCALES[si + 1];
+  if (next !== undefined) return { renderScale: next };
+  const qi = QUALITY_ORDER.indexOf(qualityName);
+  return qi > 0 ? { quality: QUALITY_ORDER[qi - 1] } : {};
+}
 /**
  * Luces puntuales visibles en TODOS los mapas: la oficina tiene 19 más el
  * fogonazo. Los demás se completan con luces de repuesto apagadas (ver
@@ -119,25 +144,31 @@ export class Renderer {
     this.cinematic = false; this.cineAngle = 0;
     this.lookAhead = 0.32;
     this.scopeTarget = 0; this.scope = 0;      // mira telescópica: la cámara se adelanta más hacia el mouse
-    this.shadowsOn = true;
+    this.shadowsOn = true; this.bloomOn = true;   // lo que pide el usuario; el preset puede negarlo (minimo)
     this._prOverride = null;                  // la armería fuerza una resolución más alta
+    this.renderScale = 1;                     // resolución dinámica (RENDER_SCALES): la baja la calidad adaptativa
     this.warmup = new ShaderWarmup(this.renderer);
 
+    this._applyPresetFlags();
     this.resize();
     window.addEventListener('resize', () => this.resize());
   }
 
   get quality() { return QUALITY[this.qualityName]; }
 
+  /** Resolución dinámica: factor sobre el dpr del preset (RENDER_SCALES); lo maneja la calidad adaptativa. */
+  setRenderScale(s) { this.renderScale = Math.max(0.5, Math.min(1, +s || 1)); this.resize(); }
+
   setQuality(name) {
     if (!QUALITY[name]) return;
     this.qualityName = name;
+    this.renderScale = 1;                     // un preset nuevo arranca a resolución completa
     const Q = QUALITY[name];
     this.moon.shadow.mapSize.set(Q.moonMap, Q.moonMap);
     if (this.moon.shadow.map) { this.moon.shadow.map.dispose(); this.moon.shadow.map = null; }
-    this.flash.castShadow = this.shadowsOn && Q.shadows && Q.flashMap > 0;
     this.flash.shadow.mapSize.set(Q.flashMap, Q.flashMap);
     if (this.flash.shadow.map) { this.flash.shadow.map.dispose(); this.flash.shadow.map = null; }
+    this._applyPresetFlags();
     // el render target con MSAA hay que recrearlo
     const rt = new THREE.WebGLRenderTarget(2, 2, { type: THREE.HalfFloatType, samples: Q.msaa });
     this.composer.renderTarget1.dispose(); this.composer.renderTarget2.dispose();
@@ -150,7 +181,9 @@ export class Renderer {
   resize() {
     const Q = QUALITY[this.qualityName];
     const w = Math.max(320, window.innerWidth), h = Math.max(240, window.innerHeight);
-    const dpr = this._prOverride || Math.min(window.devicePixelRatio || 1, Q.dpr);
+    let dpr = this._prOverride || Math.min(window.devicePixelRatio || 1, Q.dpr);
+    if (!this._prOverride && Q.maxWidth) dpr = Math.min(dpr, Q.maxWidth / w);
+    if (!this._prOverride) dpr *= this.renderScale;
     this.renderer.setPixelRatio(dpr);
     this.renderer.setSize(w, h, false);
     this.composer.setPixelRatio(dpr);
@@ -178,15 +211,27 @@ export class Renderer {
     on = !!on;
     if (this.shadowsOn === on) return;
     this.shadowsOn = on;
-    this.renderer.shadowMap.enabled = on;
-    this.moon.castShadow = on;
-    const Q = QUALITY[this.qualityName];
-    this.flash.castShadow = on && Q.shadows && Q.flashMap > 0;
-    this.scene.traverse(o => { if (o.material) o.material.needsUpdate = true; });
+    this._applyPresetFlags();
   }
 
   /** Bloom sí/no (el pase queda armado; sólo se saltea). */
-  setBloom(on) { this.bloom.enabled = !!on; }
+  setBloom(on) { this.bloomOn = !!on; this._applyPresetFlags(); }
+
+  /**
+   * Sombras y bloom EFECTIVOS = lo que pide el usuario Y lo que permite el preset («minimo» apaga
+   * los dos). Prender o apagar sombras cambia los programas: se marcan los materiales para
+   * recompilar (un tirón de una vez; en el teléfono pasa sólo al caer a «minimo»).
+   */
+  _applyPresetFlags() {
+    const Q = QUALITY[this.qualityName];
+    const sh = this.shadowsOn && !!Q.shadows;
+    const changed = this.renderer.shadowMap.enabled !== sh || this.moon.castShadow !== sh;
+    this.renderer.shadowMap.enabled = sh;
+    this.moon.castShadow = sh;
+    this.flash.castShadow = sh && Q.flashMap > 0;
+    this.bloom.enabled = this.bloomOn && Q.bloom > 0;
+    if (changed) this.scene.traverse(o => { if (o.material) o.material.needsUpdate = true; });
+  }
 
   /** Paleta y clima del lugarcito. */
   applyMood(m = {}) {

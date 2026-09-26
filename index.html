@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <title>CARRONA</title>
 <meta name="theme-color" content="#06070a">
 <link rel="icon" href="./icons/favicon-32.png" type="image/png">
@@ -182,6 +182,59 @@
   .arm-info .row { justify-content: flex-start; margin-top: 16px; }
   .arm-info .btn { min-width: 0; }
   @media (max-width: 900px) { .arm-body { grid-template-columns: 1fr; } .arm-grid { max-height: 34vh; } }
+
+  /* ── controles táctiles (touch.js): sticks flotantes y botones, sólo con el dedo y jugando ── */
+  /* las variables van en :root porque también las usa el HUD (body.touch .tl / .br): una var() que no
+     existe invalida la declaración entera y el panel del arma caía al origen, encima del de la oleada */
+  :root { --tsize: 1; --talpha: .55; --sa-l: env(safe-area-inset-left, 0px); --sa-r: env(safe-area-inset-right, 0px); --sa-t: env(safe-area-inset-top, 0px); --sa-b: env(safe-area-inset-bottom, 0px); }
+  #touch { position: fixed; inset: 0; display: none; pointer-events: none; z-index: 6; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
+  body.touch.ingame #touch { display: block; pointer-events: auto; }
+  body.touch.ingame #crosshair { display: block; }
+  body.touch.ingame { cursor: default; }
+  .tzone { position: absolute; top: 0; bottom: 0; width: 50%; }
+  .tzone.left { left: 0; } .tzone.right { right: 0; }
+  .tstick { position: absolute; left: 0; top: 0; width: calc(128px * var(--tsize)); height: calc(128px * var(--tsize)); border-radius: 50%; border: 1px solid rgba(230,227,220,.35); background: rgba(10,11,16,.22); opacity: var(--talpha); display: none; pointer-events: none; }
+  .tstick.on { display: block; }
+  .tstick .knob { position: absolute; left: 50%; top: 50%; width: calc(52px * var(--tsize)); height: calc(52px * var(--tsize)); margin: calc(-26px * var(--tsize)) 0 0 calc(-26px * var(--tsize)); border-radius: 50%; background: rgba(230,227,220,.55); box-shadow: 0 0 14px rgba(0,0,0,.35); }
+  .tbtn { position: absolute; display: flex; align-items: center; justify-content: center; text-align: center; padding: 0 10px; min-width: calc(58px * var(--tsize)); height: calc(58px * var(--tsize)); border-radius: calc(29px * var(--tsize)); border: 1px solid rgba(230,227,220,.32); background: rgba(10,11,16,.42); color: var(--fg); font-size: calc(10px * var(--tsize)); letter-spacing: .18em; opacity: var(--talpha); pointer-events: auto; touch-action: none; white-space: nowrap; }
+  .tbtn.down { background: rgba(255,210,74,.28); border-color: var(--acc); color: var(--acc); opacity: 1; }
+  .tbtn.hidden { display: none; }
+  .tbtn.pos-top-right { right: calc(16px + var(--sa-r)); top: calc(12px + var(--sa-t)); }
+  .tbtn.pos-top-center-l { left: calc(50% - 8px); transform: translateX(-100%); top: calc(12px + var(--sa-t)); }
+  .tbtn.pos-top-center-r { left: calc(50% + 8px); top: calc(12px + var(--sa-t)); }
+  .tbtn.pos-right-1 { right: calc(16px + var(--sa-r)); bottom: calc(150px * var(--tsize) + var(--sa-b)); }
+  .tbtn.pos-right-2 { right: calc(90px * var(--tsize) + var(--sa-r)); bottom: calc(196px * var(--tsize) + var(--sa-b)); }
+  .tbtn.pos-right-3 { right: calc(16px + var(--sa-r)); bottom: calc(216px * var(--tsize) + var(--sa-b)); }
+  .tbtn.pos-left-1 { left: calc(16px + var(--sa-l)); bottom: calc(150px * var(--tsize) + var(--sa-b)); }
+  .tbtn.pos-center-bottom { left: 50%; transform: translateX(-50%); bottom: calc(22px + var(--sa-b)); color: var(--acc); border-color: rgba(255,210,74,.6); }
+  .tbtn.pos-fire { display: none; right: calc(16px + var(--sa-r)); bottom: calc(22px + var(--sa-b)); width: calc(96px * var(--tsize)); height: calc(96px * var(--tsize)); border-radius: 50%; font-size: calc(12px * var(--tsize)); color: #ff8a8a; border-color: rgba(255,120,120,.5); }
+  #touch.firebtn .tbtn.pos-fire { display: flex; }
+  #touch.firebtn .tbtn.pos-right-1 { bottom: calc(150px * var(--tsize) + var(--sa-b)); }
+  /* zurdo: los botones de la derecha pasan a la izquierda y viceversa (los sticks los espeja touch.js) */
+  #touch.lefty .tbtn.pos-right-1 { right: auto; left: calc(16px + var(--sa-l)); }
+  #touch.lefty .tbtn.pos-right-2 { right: auto; left: calc(90px * var(--tsize) + var(--sa-l)); }
+  #touch.lefty .tbtn.pos-right-3 { right: auto; left: calc(16px + var(--sa-l)); }
+  #touch.lefty .tbtn.pos-left-1 { left: auto; right: calc(16px + var(--sa-r)); }
+  #touch.lefty .tbtn.pos-fire { right: auto; left: calc(16px + var(--sa-l)); }
+  /* con el dedo el HUD se corre hacia adentro y deja lugar a los botones; la linterna se ve en su botón */
+  body.touch .tl { left: calc(16px + var(--sa-l)); top: calc(12px + var(--sa-t)); }
+  /* el panel del arma sube a la derecha, pegado a PAUSA: abajo no cabe encima de los botones en 411 dp de alto */
+  body.touch .br { right: calc(90px + var(--sa-r)); top: calc(12px + var(--sa-t)); bottom: auto; }
+  body.touch #ammo { font-size: 22px; } body.touch #ammo b { font-size: 30px; }
+  body.touch #flash { display: none; }
+  body.touch #slots span { width: 34px; height: 34px; pointer-events: auto; touch-action: manipulation; }
+  body.touch #prompt .k { display: none; }
+  body.touch .keys { grid-template-columns: 1fr; }
+  body.touch .keys .touchline { color: var(--dim); letter-spacing: .14em; }
+  body.touch #version { display: none; }
+  body.native #b-fullscreen, body.native #b-install { display: none !important; }
+  /* pantallas bajas (teléfono apaisado): títulos y listas más compactos */
+  @media (max-height: 520px) {
+    .title { font-size: clamp(40px, 9vw, 90px); } .stack { margin-top: 16px; gap: 6px; } .btn { padding: 8px 16px; font-size: 12px; min-width: 240px; }
+    .keys { margin-top: 12px; font-size: 10px; } #progress-line, #best { margin-top: 6px; font-size: 10px; }
+    .list { max-height: 46vh; } #opts { max-height: 58vh; } .stats { gap: 22px; margin-top: 14px; } .stats b { font-size: 26px; }
+    #armory { padding: 10px 14px; } .arm-grid { max-height: 30vh; }
+  }
 
 </style>
 <script type="importmap">

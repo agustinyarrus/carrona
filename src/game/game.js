@@ -45,7 +45,15 @@ const CURTAIN_S = 0.8;
 const WARM_BUDGET_CURTAIN_MS = 48;
 const WARM_BUDGET_GATE_MS = 250;
 import { HUMS } from '../audio/audio.js';
-import { makeRng, rnd, clamp, clamp01, TAU } from '../core/util.js';
+import { makeRng, rnd, clamp, clamp01, TAU, splitStep } from '../core/util.js';
+import { snapAim, stickToWorld } from '../core/sticks.js';
+import { haptic, setHaptics, HAPTIC } from '../core/haptics.js';
+import { coarsePointer } from '../core/touch.js';
+import { isNative } from '../core/pwa.js';
+import { adaptiveStepDown } from '../render/renderer.js';
+
+/** Con el stick de puntería el punto apuntado está a esta distancia del jugador (m). */
+const TOUCH_AIM_DIST = 6;
 
 const SKIN_PLAYER = [0.79, 0.45, 0.28];
 // cómo se sostiene cada tipo de arma: mano izquierda adelante (lo da el modelo), altura y lado
@@ -120,6 +128,8 @@ export class Game {
     // cuando los shaders están listos (las trabas de la placa al estrenarlos quedan detrás del negro)
     this.curtain = { phase: 'closed', t: 0 };
     renderer.setFade(1);
+    // controles táctiles (main.js engancha la capa DOM en `touch`; acá sólo el modo)
+    this.touch = null; this.touchMode = false; this._touchDir = { x: 0, z: 1 };
     this.flashModel = flashlightModel();
     this.scene.add(this.flashModel);
     this.beam = beamCone(8.5, 1.9);
@@ -574,6 +584,7 @@ export class Game {
           if (this.mission) this.mission.onPickup(p);
         }
         this.audio.pickup(p.kind === 'objective' ? 'weapon' : p.kind);
+        haptic(HAPTIC.pickup);
         this.fx.sparks(p.x, 0.3, p.z, 0, 1, 0, 14, 1, 0.9, 0.5);
         this.pickupGroup.remove(p.mesh); this.pickups.splice(i, 1);
       }
@@ -690,6 +701,7 @@ export class Game {
   }
 
   fire(def) {
+    haptic(HAPTIC.shot);   // con techo de frecuencia: una automática no satura el motor
     const P = this.player, B = P.body, w = this.world, inst = this.heldInst;
     if (inst) inst.group.updateMatrixWorld(true);
     const m = this._muzzleWorld(this._v, inst ? inst.muzzleIdx++ : 0);
@@ -722,6 +734,49 @@ export class Game {
     if (inst) kickWeapon(inst);
     P.onFired(def);
     this.audio.shot(def);
+  }
+
+  // ═══ controles táctiles ═══════════════════════════════════════════════════
+  /**
+   * El punto apuntado con el stick derecho: a TOUCH_AIM_DIST del jugador en la
+   * dirección del stick (ejes de la cámara); al soltarlo queda la última. Con
+   * la ayuda de puntería, la dirección se imanta al zombi vivo que tenga a
+   * menos de 11° y 14 m. O(horda) sólo con el stick activo.
+   */
+  _touchAim(I, P) {
+    const a = I.aimStick;
+    const sx = a.active ? a.x : a.lastX, sy = a.active ? a.y : a.lastY;
+    const d = stickToWorld(sx, sy, this._fwd, this._rgt);
+    let dx = d.x, dz = d.z;
+    if (P && a.active && this.settings.touchAssist && this.zm) {
+      const alive = [];
+      for (const Z of this.zm.zombies) if (!Z.dead && Z.body.alive) alive.push(Z);
+      const s = snapAim(dx, dz, P.x, P.z, alive);
+      dx = s.dx; dz = s.dz;
+    }
+    this._touchDir.x = dx; this._touchDir.z = dz;
+    const ox = P ? P.x : 0, oz = P ? P.z : 0;
+    this._aim.x = ox + dx * TOUCH_AIM_DIST; this._aim.y = 1.0; this._aim.z = oz + dz * TOUCH_AIM_DIST;
+    // con el stick activo, un hilo tenue del jugador a la mira: en una pantalla chica se ve a dónde se apunta
+    if (P && a.active && this.state === 'playing' && this.shotfx) this.shotfx.segment(ox, 1.0, oz, this._aim.x, 1.0, this._aim.z, 0.004, 0xe6e3dc, 0.35, 0.03);
+  }
+
+  /** 'auto' | 'si' | 'no': con 'auto', el dedo manda si el puntero principal es grueso o en la app nativa. */
+  setTouchMode(v) {
+    const on = v === 'si' || (v !== 'no' && (coarsePointer() || isNative()));
+    this.touchMode = on;
+    setHaptics(on && this.settings.touchHaptics !== false);   // la vibración es cosa del dedo
+    if (typeof document !== 'undefined') document.body.classList.toggle('touch', on);
+    if (this.touch) this.touch.enable(on);
+  }
+
+  /** El botón ATRÁS de Android: cierra lo que esté arriba; en el menú principal devuelve 'exit'. */
+  backButton() {
+    if (this.state === 'playing') { this.pause(); return 'handled'; }
+    if (this.state === 'paused') { if (this.ui.optionsOpen) this.ui.back(); else this.resume(); return 'handled'; }
+    if (this.state === 'dead' || this.state === 'won') { if (this.ui.endScreenOn) this.startMenu(); return 'handled'; }
+    if (this.ui.screen && this.ui.screen !== 'menu') { this.ui.back(); return 'handled'; }
+    return 'exit';
   }
 
   /** Mira láser: un hilo de luz de la boca hasta lo primero que toca, y el punto. */
@@ -955,6 +1010,7 @@ export class Game {
     this._announceWeapon(p.weapon, fresh);
     this._setWeaponVisible(A.current);
     this.audio.pickup('weapon');
+    haptic(HAPTIC.pickup);
     this.audio.humStop();
     this.fx.sparks(p.x, 0.3, p.z, 0, 1, 0, 14, 1, 0.9, 0.5);
     this._swapTarget = null;
@@ -1176,13 +1232,14 @@ export class Game {
 
     // ── jugador ──
     const playing = this.state === 'playing';
-    R.screenToGround(I.nx, I.ny, 1.0, this._aim);
+    R.forwardXZ(this._fwd); R.rightXZ(this._rgt);
+    if (this.touchMode) this._touchAim(I, P); else R.screenToGround(I.nx, I.ny, 1.0, this._aim);
     if (playing) {
-      R.forwardXZ(this._fwd); R.rightXZ(this._rgt);
       const inp = {
-        mx: I.axis('moveLeft', 'moveRight'),
-        mz: I.axis('moveDown', 'moveUp'),
-        run: I.act('run'),
+        mx: I.moveX(),
+        mz: I.moveZ(),
+        run: I.run,
+        analog: I.move.active,        // stick táctil: la velocidad sigue una curva continua (player.js)
         crouch: I.act('crouch'),
         aimX: this._aim.x, aimZ: this._aim.z,
       };
@@ -1216,7 +1273,8 @@ export class Game {
           } else if ((B.state === 'down' && B.downT > 0.12) || B.state === 'rest') B._startGetUp();
         }
         this._buildTargets();
-        const shot = A.tryFire(I.fire && canAct, dt);
+        // el gatillo táctil (stick empujado o botón FUEGO) repite las semiautomáticas; un mouse en el teléfono, no
+        const shot = A.tryFire(I.fire && canAct, dt, this.touchMode && I.virtual.has('fire'));
         if (shot === 'empty') { this.audio.empty(); if (A.weapon.canReload) { A.startReload(); this.audio.reload(A.def); } }
         else if (shot) this.fire(shot);
         // recarga automática al vaciar
@@ -1234,24 +1292,32 @@ export class Game {
 
     // con la armería abierta el menú no se ve: ni horda ni física (el cuadro es de las miniaturas)
     if (!(this.state === 'menu' && this.armory && this.armory.active)) {
-      // ── horda (y después lo que le dejaron los tiros: fuego, frío, ácido, choque) ──
-      this.zm.update(dt, P, this._hooks());
-      this._buildTargets();
-      this.status.update(dt, (Z, dmg, def, kind) => this._statusDamage(Z, dmg, def, kind));
-      this.status.applySlows();
+      // la simulación va en pasos de a lo sumo SIM.step: un cuadro lento (un teléfono a 25 fps) se
+      // parte en dos o tres pasos y el juego sigue a tiempo real en vez de ir en cámara lenta
+      const { n, h } = splitStep(dt);
+      const hooks = this._hooks();
+      const statusDmg = (Z, dmg, def, kind) => this._statusDamage(Z, dmg, def, kind);
+      for (let k = 0; k < n; k++) {
+        // ── horda (y después lo que le dejaron los tiros: fuego, frío, ácido, choque) ──
+        this.zm.update(h, P, hooks);
+        this._buildTargets();
+        this.status.update(h, statusDmg);
+        this.status.applySlows();
 
-      // ── física ──
-      for (let i = 0; i < w.bodies.length; i++) {
-        const b = w.bodies[i];
-        if (!b.update) continue;
-        b.update(dt);
-        // aterrizó recién (salto, brinco, bajada): golpe sordo según la altura
-        if (b.landT === 0 && b.lastLandDrop !== undefined && b.p) this.audio.thud(b.x, b.z, 0.35 + Math.min(1.2, b.lastLandDrop));
+        // ── física ──
+        for (let i = 0; i < w.bodies.length; i++) {
+          const b = w.bodies[i];
+          if (!b.update) continue;
+          b.update(h);
+          // aterrizó recién (salto, brinco, bajada): golpe sordo según la altura
+          if (b.landT === 0 && b.lastLandDrop !== undefined && b.p) this.audio.thud(b.x, b.z, 0.35 + Math.min(1.2, b.lastLandDrop));
+        }
+        this.props.update(h);
+        w.step(h);
+        // proyectiles DESPUÉS del paso: barren contra los huesos donde quedaron este paso
+        this.ballistics.update(h);
       }
-      this.props.update(dt);
-      w.step(dt);
-      // proyectiles DESPUÉS del paso: barren contra los huesos donde quedaron este cuadro
-      this.ballistics.update(dt);
+      this.perf.simSteps = n;
     }
     this.perf.phys = performance.now() - t0;
 
@@ -1276,14 +1342,18 @@ export class Game {
     this.perf._acc += dt; this.perf._n++;
     if (this.perf._acc >= 0.5) {
       this.perf.fps = this.perf._n / this.perf._acc; this.perf._acc = 0; this.perf._n = 0;
-      // calidad adaptativa: si no llega a 45 fps sostenidos, baja un escalón (nunca sube sola)
+      // calidad adaptativa: si no llega a 45 fps sostenidos, baja un escalón (nunca sube sola):
+      // primero la resolución de render (sin aviso, es fino), después el preset (con aviso)
       if (this.settings.autoQuality && playing) {
         this.perf.lowT = this.perf.fps < 45 ? (this.perf.lowT || 0) + 0.5 : 0;
-        if (this.perf.lowT >= 3 && this.R.qualityName !== 'bajo') {
-          const next = this.R.qualityName === 'alto' ? 'medio' : 'bajo';
+        if (this.perf.lowT >= 3) {
           this.perf.lowT = 0;
-          this.applySettings({ quality: next });
-          this.ui.toast(t('toast.quality', { q: t('options.quality.' + next).toUpperCase() }));
+          const step = adaptiveStepDown(this.R.qualityName, this.R.renderScale);
+          if (step.renderScale !== undefined) this.R.setRenderScale(step.renderScale);
+          else if (step.quality) {
+            this.applySettings({ quality: step.quality });
+            this.ui.toast(t('toast.quality', { q: t('options.quality.' + step.quality).toUpperCase() }));
+          }
         }
       }
     }
@@ -1316,7 +1386,8 @@ export class Game {
       slots, flashlight: P.flashlight,
       objective, progress, flashKey: this.settings.keys.flashlight[0] || '',
     });
-    this.ui.crosshair(this.input.mouseX, this.input.mouseY, W.def.spread, P.moving);
+    if (this.touchMode) { const s = this.R.worldToScreen(this._aim.x, 1.0, this._aim.z, this._scr); this.ui.crosshair(s.x, s.y, W.def.spread, P.moving); }
+    else this.ui.crosshair(this.input.mouseX, this.input.mouseY, W.def.spread, P.moving);
     // marcador del objetivo: proyectado a pantalla, pegado al borde si queda afuera
     const tg = M ? M.target() : null;
     if (tg) {

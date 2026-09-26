@@ -6,6 +6,11 @@
 //  la tabla `keys` (acción → códigos) viene de los ajustes y se puede cambiar
 //  en caliente. Un clic sobre una pantalla del menú (botones, listas,
 //  deslizadores) no le llega al juego: el mouse sólo cuenta sobre el canvas.
+//
+//  Capa VIRTUAL (los controles táctiles, touch.js): acciones mantenidas o
+//  tocadas (setVirtual / tapVirtual), un eje analógico de movimiento (setMove)
+//  y la dirección del stick de puntería (setAim). El juego pregunta por
+//  acciones y ejes y no sabe si vinieron del teclado o del dedo.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const UI_SELECTOR = '.screen, .ui';
@@ -20,6 +25,16 @@ export class Input {
     this.buttons = 0;
     this.wheel = 0;
     this.capture = null;                   // callback esperando la próxima tecla (rebindeo)
+    // capa virtual (táctil)
+    this.virtual = new Set();              // acciones mantenidas
+    this.virtualPressed = new Set();       // acciones tocadas en este frame
+    this.move = { x: 0, y: 0, active: false, run: false };          // stick izquierdo: x derecha, y adelante
+    this.aimStick = { x: 0, y: 0, active: false, lastX: 0, lastY: 1 }; // stick derecho: la última dirección queda
+    // capa virtual (táctil)
+    this.virtual = new Set();              // acciones mantenidas
+    this.virtualPressed = new Set();       // acciones tocadas en este frame
+    this.move = { x: 0, y: 0, active: false, run: false };          // stick izquierdo: x derecha, y adelante
+    this.aimStick = { x: 0, y: 0, active: false, lastX: 0, lastY: 1 }; // stick derecho: la última dirección queda
     this.setKeys(keys);
     this._onKeyDown = (e) => {
       if (e.repeat) return;
@@ -80,12 +95,35 @@ export class Input {
 
   held(code) { return code.startsWith('Mouse') ? (this.buttons & (1 << +code.slice(5))) !== 0 : this.down.has(code); }
   pressed(code) { return this.pressedSet.has(code); }
-  /** ¿Alguna tecla de la acción está apretada? */
-  act(name) { const l = this.keys[name]; if (!l) return false; for (const c of l) if (this.held(c)) return true; return false; }
-  /** ¿Alguna tecla de la acción se apretó en este frame? */
-  actPressed(name) { const l = this.keys[name]; if (!l) return false; for (const c of l) if (this.pressedSet.has(c)) return true; return false; }
+  /** ¿Alguna tecla de la acción está apretada (o el control táctil la mantiene)? */
+  act(name) { if (this.virtual.has(name)) return true; const l = this.keys[name]; if (!l) return false; for (const c of l) if (this.held(c)) return true; return false; }
+  /** ¿Alguna tecla de la acción se apretó en este frame (o el control táctil la tocó)? */
+  actPressed(name) { if (this.virtualPressed.has(name)) return true; const l = this.keys[name]; if (!l) return false; for (const c of l) if (this.pressedSet.has(c)) return true; return false; }
   axis(neg, pos) { return (this.act(pos) ? 1 : 0) - (this.act(neg) ? 1 : 0); }
+  /** Ejes de movimiento: el stick si está activo; si no, las teclas (-1, 0, 1). */
+  moveX() { return this.move.active ? this.move.x : this.axis('moveLeft', 'moveRight'); }
+  moveZ() { return this.move.active ? this.move.y : this.axis('moveDown', 'moveUp'); }
   get fire() { return this.act('fire'); }
+  /** ¿Corre? Shift, o el stick izquierdo al fondo. */
+  get run() { return this.move.run || this.act('run'); }
+
+  // ── capa virtual (los controles táctiles escriben acá) ──
+  /** Mantiene o suelta una acción; al mantenerla también cuenta como tocada en este frame. */
+  setVirtual(action, held) {
+    if (held) { if (!this.virtual.has(action)) this.virtualPressed.add(action); this.virtual.add(action); }
+    else this.virtual.delete(action);
+  }
+  /** Una acción tocada (un flanco) que el juego lee en el próximo frame. */
+  tapVirtual(action) { this.virtualPressed.add(action); }
+  /** Stick de movimiento: x derecha, y adelante, en -1..1; `run` si está al fondo. */
+  setMove(x, y, active, run = false) { const m = this.move; m.x = x; m.y = y; m.active = !!active; m.run = !!(active && run); }
+  /** Stick de puntería. Al soltarlo, la última dirección queda (el personaje sigue mirando ahí). */
+  setAim(x, y, active) {
+    const a = this.aimStick;
+    a.x = x; a.y = y; a.active = !!active;
+    const l = Math.hypot(x, y);
+    if (active && l > 1e-6) { a.lastX = x / l; a.lastY = y / l; }
+  }
   /** Llamar al final del frame: limpia los flancos y la rueda. */
-  endFrame() { this.pressedSet.clear(); this.wheel = 0; }
+  endFrame() { this.pressedSet.clear(); this.virtualPressed.clear(); this.wheel = 0; }
 }

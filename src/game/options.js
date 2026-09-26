@@ -8,6 +8,7 @@
 
 import { QUALITY_ORDER } from '../render/renderer.js';
 import { LANGS, setLang } from '../core/i18n.js';
+import { setHaptics } from '../core/haptics.js';
 
 export const SETTINGS_KEY = 'carrona.settings';
 
@@ -64,6 +65,15 @@ export const OPTIONS = [
     apply: (g, v) => { g.R.camPitch = v; } },
   { key: 'lookAhead', group: 'game', type: 'range', min: 0, max: 0.8, step: 0.05, def: 0.32, fmt: pct, apply: (g, v) => { g.R.lookAhead = v; } },
   { key: 'lang', group: 'game', type: 'select', values: LANGS, def: 'es', apply: (g, v) => { setLang(v); g.ui.relabel(); } },
+
+  // controles táctiles (touch.js): en 'auto' se prenden si el puntero principal es un dedo o en la app nativa
+  { key: 'touch', group: 'controls', type: 'select', values: ['auto', 'si', 'no'], def: 'auto', apply: (g, v) => g.setTouchMode(v) },
+  { key: 'touchFire', group: 'controls', type: 'select', values: ['stick', 'boton'], def: 'stick', apply: (g, v) => { if (g.touch) g.touch.setFireMode(v); } },
+  { key: 'touchAssist', group: 'controls', type: 'toggle', def: true, apply: () => {} },
+  { key: 'touchSize', group: 'controls', type: 'range', min: 0.7, max: 1.5, step: 0.05, def: 1, fmt: pct, apply: (g, v) => { if (g.touch) g.touch.setSize(v); } },
+  { key: 'touchOpacity', group: 'controls', type: 'range', min: 0.2, max: 0.9, step: 0.05, def: 0.55, fmt: pct, apply: (g, v) => { if (g.touch) g.touch.setOpacity(v); } },
+  { key: 'touchLefty', group: 'controls', type: 'toggle', def: false, apply: (g, v) => { if (g.touch) g.touch.setLefty(v); } },
+  { key: 'touchHaptics', group: 'controls', type: 'toggle', def: true, apply: (g, v) => setHaptics(v && !!g.touchMode) },
 ];
 export const OPTION_GROUPS = ['video', 'audio', 'game', 'controls'];
 

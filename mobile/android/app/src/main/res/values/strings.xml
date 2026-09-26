@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">CARRONA</string>
+    <string name="title_activity_main">CARRONA</string>
+    <string name="package_name">com.agustinyarrus.carrona</string>
+    <string name="custom_url_scheme">com.agustinyarrus.carrona</string>
+</resources>

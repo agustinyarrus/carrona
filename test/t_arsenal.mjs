@@ -110,6 +110,13 @@ group('arsenal por ranuras');
   for (let i = 0; i < 120; i++) { const r = B.tryFire(i < 60, DT); if (r && r !== 'empty') { shots++; times.push(i); } B.update(DT); }
   ok('ráfaga de 3 con el gatillo apretado: 3 tiros', shots === 3, `${shots} tiros en ${times.join(',')}`);
   ok('dentro de la ráfaga los tiros van a burstRate', times.length === 3 && (times[2] - times[0]) * DT < 3.5 / WEAPONS.cuis.burstRate, times.join(','));
+  // gatillo táctil: la semiautomática repite sola a su cadencia mientras el stick siga empujado
+  const S1 = new Arsenal(); S1.switchT = 0; S1.weapon.mag = 99; S1.weapon.reserve = 999;
+  let semi = 0; for (let i = 0; i < 120; i++) { const r = S1.tryFire(true, DT); if (r && r !== 'empty') semi++; S1.update(DT); }
+  ok('la pistola con el gatillo apretado (mouse) tira UNA vez', semi === 1, `${semi}`);
+  const S2 = new Arsenal(); S2.switchT = 0; S2.weapon.mag = 99; S2.weapon.reserve = 999;
+  semi = 0; for (let i = 0; i < 120; i++) { const r = S2.tryFire(true, DT, true); if (r && r !== 'empty') semi++; S2.update(DT); }
+  ok('con el gatillo táctil (repeat) repite a su cadencia, no más rápido', semi >= Math.floor(2 * WEAPONS.pistol.rate) - 1 && semi <= Math.ceil(2 * WEAPONS.pistol.rate) + 1, `${semi} tiros en 2 s · cadencia ${WEAPONS.pistol.rate}/s`);
   // giro previo
   const M = new Arsenal(); M.give('molino'); M.switchT = 0;
   let first = -1; shots = 0;

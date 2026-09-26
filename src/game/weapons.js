@@ -149,12 +149,15 @@ export class Arsenal {
   }
   /**
    * ¿Dispara? `held` = gatillo apretado este frame, `dt` para el giro previo.
+   * `repeat` = el gatillo es un stick o un botón táctil: las semiautomáticas
+   * repiten solas a su cadencia mientras siga apretado (con el dedo no hay
+   * «soltar y volver a apretar» cómodo; con el mouse sí, y ahí manda el clic).
    * Devuelve la definición del arma si sale un tiro, 'empty' si hizo clic
    * en vacío, null si nada. Máquina de estados chica: ráfaga en curso >
    * gatillo suelto > bloqueos (cambio, recarga, cadencia, recalentado) >
    * giro/carga > tiro.
    */
-  tryFire(held, dt = 0) {
+  tryFire(held, dt = 0, repeat = false) {
     const s = this.weapon, d = s.def;
     if (d.windup) {
       if (held && this.switchT <= 0 && s.reloading <= 0 && s.overheat <= 0 && s.mag >= 1) s.spin = Math.min(1, s.spin + dt / d.windup);
@@ -168,7 +171,7 @@ export class Arsenal {
     }
     if (!held) { s.trigger = false; return null; }
     if (this.switchT > 0 || s.reloading > 0 || s.cool > 0 || s.overheat > 0) return null;
-    if (!d.auto && s.trigger) return null;
+    if (!d.auto && s.trigger && !repeat) return null;
     if (d.windup && s.spin < 1) return null;
     s.trigger = true;
     if (s.mag < 1) { s.cool = EMPTY_CLICK_COOL; return 'empty'; }

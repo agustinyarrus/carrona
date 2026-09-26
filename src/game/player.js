@@ -10,6 +10,8 @@
 import { Ragdoll, CHEST, HIP, HEAD, HAR, HAL } from '../phys/ragdoll.js';
 import { Arsenal } from './weapons.js';
 import { clamp, clamp01, angDelta, TAU } from '../core/util.js';
+import { analogSpeed } from '../core/sticks.js';
+import { haptic, HAPTIC } from '../core/haptics.js';
 
 export class Player {
   constructor(world, rng, opt = {}) {
@@ -68,8 +70,10 @@ export class Player {
     const slow = (B.stagger > 0.25 ? 0.35 : 1) * (this.grabbed > 0 ? 0.35 : 1);
     B.wantCrouch = !!input.crouch && !input.run;
     const crouchF = 1 - 0.5 * B.crouch;
-    const speed = (input.run ? this.runSpeed : this.walkSpeed) * slow * crouchF * (B.crawling ? 0.4 : 1);
-    B.wantX = vx; B.wantZ = vz; B.wantSpeed = mag * speed;
+    // teclado: caminar, o correr con Shift, por la magnitud digital. Stick analógico: una sola
+    // curva continua de la zona muerta al fondo (analogSpeed), sin el salto al cruzar el umbral
+    const base = input.analog ? analogSpeed(mag, this.walkSpeed, this.runSpeed) : (input.run ? this.runSpeed : this.walkSpeed) * mag;
+    B.wantX = vx; B.wantZ = vz; B.wantSpeed = base * slow * crouchF * (B.crawling ? 0.4 : 1);
     // — en el piso o levantándose no se queda quieto: el empuje va al cuerpo
     //   (rueda de costado, gatea, y la levantada mira hacia donde aprieta) —
     if ((B.state === 'down' || B.state === 'rising' || B.state === 'move') && mag > 0.3) B.groundDrive(vx, vz, input.run ? 2.0 : 1.4);
@@ -126,6 +130,7 @@ export class Player {
     this.hp -= amount;
     this.hurtT = 0;
     this.damageFlash = Math.min(1, this.damageFlash + 0.45 + amount * 0.012);
+    haptic(HAPTIC.hurt, true);   // el golpe se siente en la mano aunque se esté disparando
     const B = this.body, w = this.world;
     // empujón lejos del atacante, que se sienta el golpe
     let dx = this.x - fromX, dz = this.z - fromZ;

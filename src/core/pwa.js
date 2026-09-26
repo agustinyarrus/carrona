@@ -23,6 +23,11 @@
 
 let deferredPrompt = null;
 
+/** ¿Corre dentro de la app nativa (Capacitor)? Ahí no hay INSTALAR ni PANTALLA COMPLETA: ya lo es. */
+export function isNative() {
+  try { const C = window.Capacitor; return !!(C && typeof C.isNativePlatform === 'function' && C.isNativePlatform()); } catch { return false; }
+}
+
 export function isStandalone() {
   try {
     return (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||

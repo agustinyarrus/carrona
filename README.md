@@ -49,9 +49,9 @@ y después se levanta: rodando y empujando con los brazos, o de un salto si tien
 
 ## Jugar
 
-Hay tres caminos; en los tres el juego corre en `http://localhost:8765/` (los módulos ES no
-cargan desde `file://`, por eso siempre hay un servidor local atrás; los récords y ajustes viven
-en el `localStorage` de ese origen).
+Hay cuatro caminos; en los tres de Windows el juego corre en `http://localhost:8765/` (los
+módulos ES no cargan desde `file://`, por eso siempre hay un servidor local atrás; los récords y
+ajustes viven en el `localStorage` de ese origen).
 
 **1. Instalador (Windows 10/11, sin Python ni nada).** Bajá `CARRONA-Setup-x.y.z.exe` de
 [Releases](../../releases), ejecutalo y listo: instala por usuario (sin pedir administrador) en
@@ -70,6 +70,12 @@ sobre el zip → *Propiedades* → *Desbloquear*.
 `http://localhost:8765/` (`python serve.py 8766 --no-open --dir dist` para otro puerto, sin
 abrir el navegador, o sirviendo otra carpeta). También podés usar el lanzador de Windows desde
 el repo: `Jugar CARRONA.bat`.
+
+**4. Android (APK).** Bajá el `.apk` de [Releases](../../releases) al teléfono, abrilo e
+instalalo (la primera vez Android pide permitir instalar desde esa app). Es el mismo juego
+envuelto en una app nativa: pantalla completa apaisada, dos sticks flotantes (el dedo izquierdo
+mueve, el derecho apunta y empujándolo dispara) y botones para lo demás; el botón ATRÁS pausa.
+Los controles táctiles están en *Menú y opciones*; cómo se arma el APK, en *Android*.
 
 ### Instalar como app (PWA)
 
@@ -243,10 +249,10 @@ pantalla, la validación de lo guardado y la persistencia en `carrona.settings`.
 
 | Grupo | Opciones |
 |---|---|
-| video | pantalla completa, calidad (bajo / medio / alto), bajar la calidad sola si no llega a 45 fps, sombras, bloom, mostrar fps |
+| video | pantalla completa, calidad (minimo / movil / bajo / medio / alto), bajar la calidad sola si no llega a 45 fps (primero la resolución, después el preset), sombras, bloom, mostrar fps |
 | audio | volumen general, efectos, ambiente y música (tres buses de Web Audio) |
 | juego | sacudida de cámara, distancia e inclinación de cámara, adelanto hacia el mouse, idioma (castellano / inglés) |
-| controles | todas las acciones con teclas configurables (clic en la tecla, apretar la nueva; esc cancela), teclas por defecto |
+| controles | controles táctiles (auto / sí / no), disparo táctil (empujando el stick / botón FUEGO), ayuda de puntería, tamaño y opacidad de los controles, zurdo, vibración; todas las acciones con teclas configurables (clic en la tecla, apretar la nueva; esc cancela), teclas por defecto |
 
 Los textos viven en `src/core/i18n.js` en los dos idiomas; el idioma cambia en caliente, sin
 recargar.
@@ -266,6 +272,31 @@ recargar.
 | F | linterna |
 | Esc | pausa |
 | F3 | panel de rendimiento |
+
+Con el dedo (teléfono, tablet o la app de Android: se prenden solos cuando el puntero principal
+es grueso; en un portátil con pantalla táctil manda el mouse, salvo que se fuercen en opciones):
+
+| Gesto | Acción |
+|---|---|
+| dedo izquierdo, donde sea de la mitad izquierda | **stick de movimiento**: aparece donde apoyás, se mueve relativo a la cámara y **sigue al dedo** (pasado el borde, el origen se arrastra detrás: cambiar de dirección es inmediato). La velocidad es una sola curva continua de la zona muerta al fondo: hasta el 70 % del recorrido crece hasta caminar (3,6 m/s), de ahí al fondo pasa suave a correr (5,6 m/s); la postura de correr (arma abajo, esquive, salto) entra al 85 % con histéresis |
+| dedo derecho, mitad derecha | **stick de puntería**: apunta a 6 m en esa dirección y **empujándolo más de la mitad dispara** (al soltarlo deja de disparar; las semiautomáticas repiten solas a su cadencia mientras esté empujado). La ayuda de puntería imanta al zombi más cercano dentro de un cono de 11° hasta 14 m |
+| FUEGO | botón de disparo aparte, si en opciones elegís *disparo táctil: botón* (el stick derecho sólo apunta) |
+| RECARGAR · TREPAR · AGACHARSE · LINTERNA | los botones de los costados. AGACHARSE se mantiene; tocado corriendo, rodada |
+| ⟲ ⟳ | girar la cámara 45° |
+| AGARRAR | aparece con el nombre del arma del piso cuando su ranura está ocupada |
+| ranuras del HUD | tocar una saca esa arma |
+| II | pausa (en la app, también el botón ATRÁS del sistema) |
+| vibración | un pulso corto por tiro (con techo de frecuencia: una automática no satura el motor), uno más largo al recibir un golpe, uno al agarrar algo. Se apaga en opciones |
+| zurdo | en opciones: la mitad derecha mueve, la izquierda apunta, y los botones se espejan |
+
+Con el stick activo, un hilo tenue une al jugador con la mira: en una pantalla chica se ve a
+dónde se apunta sin buscar la cruz.
+
+Los sticks son flotantes a propósito: nunca hay que mirar dónde están. Cada dedo se sigue por
+su `pointerId`, así los dos sticks y un botón conviven sin mezclarse; y si la app se va al fondo
+con un dedo apoyado, se sueltan todos (nadie vuelve a una partida con el personaje caminando solo).
+La matemática (zona muerta, saturación, histéresis, ejes de cámara, ayuda de puntería) está en
+`src/core/sticks.js`, sin DOM, y `test/t_touch.mjs` la prueba.
 
 Armas: la pistola (munición infinita) de entrada; el subfusil cae en la oleada 2, la escopeta en
 la 3 y el fusil en la 5 (atraviesa un cuerpo), y el resto del arsenal por rareza (ver *El
@@ -295,8 +326,61 @@ El instalador se compila con [Inno Setup 6](https://jrsoftware.org/isinfo.php):
 Para publicar: subí la versión en `package.json` y `src/core/version.js`, y pusheá un tag
 `vX.Y.Z`. El workflow `.github/workflows/release.yml` corre en `windows-latest`: genera los
 íconos, corre las pruebas y el build, compila el instalador con el Inno Setup que trae el
-runner y crea el release de GitHub con el `.exe` y el zip adjuntos. Se puede lanzar a mano
-(*workflow_dispatch*) para probar sin publicar: deja los archivos como artefactos.
+runner y crea el release de GitHub con el `.exe`, el zip y el `.apk` adjuntos. Se puede lanzar a
+mano (*workflow_dispatch*) para probar sin publicar: deja los archivos como artefactos.
+
+### Android
+
+<div align="center">
+
+![CARRONA en Android](docs/android.jpg)
+
+*el polígono en el teléfono: stick de movimiento flotante, botones, el HUD compacto*
+
+</div>
+
+`mobile/` es el envoltorio nativo: [Capacitor 6](https://capacitorjs.com) con un solo proyecto
+(`mobile/android`), sin plugins. El juego no cambia: `tools/build.mjs --android` arma
+`dist-android/www` (index.html, src, vendor, íconos, manifest y LICENSE, con una meta
+`carrona-platform`; sin lanzador, sin `.bat` y sin service worker, porque el WebView sirve los
+archivos desde la app y no hay nada que cachear), `cap sync` lo copia adentro del proyecto y
+Gradle arma el APK. `tools/apk.mjs` hace todo eso de una:
+
+```
+npm ci --prefix mobile               # una vez: Capacitor y el generador de íconos (el juego no tiene dependencias)
+node tools/apk.mjs                   # build web → cap sync → assembleDebug → dist-android/CARRONA-x.y.z-debug.apk
+node tools/apk.mjs --install --run   # además lo instala y lo abre en el teléfono o emulador conectado (adb)
+node tools/apk.mjs --release         # firmado si existe mobile/android/keystore.properties; si no, sin firmar
+```
+
+Hace falta un JDK 17 o más nuevo y el SDK de Android (`ANDROID_HOME`, o el de Android Studio en
+`%LOCALAPPDATA%\Android\Sdk`; `apk.mjs` escribe `local.properties` si no está). La versión y el
+`versionCode` de la app salen del `package.json` de la raíz: no hay dos lugares que actualizar.
+
+Lo que hace la app además de mostrar el juego (`MainActivity.java`, sesenta líneas):
+
+- **Pantalla completa inmersiva** (las barras del sistema se esconden; un gesto desde el borde
+  las asoma un momento) y **apaisado** (`sensorLandscape`: gira con el teléfono, nunca vertical).
+- **La pantalla no se apaga** mientras el juego está adelante (`FLAG_KEEP_SCREEN_ON`).
+- **El botón ATRÁS va al juego**: `carrona.backButton()` cierra lo que esté arriba (pausa
+  jugando, sigue en pausa, cierra opciones, vuelve del arsenal); en el menú principal la app se
+  va al fondo (`moveTaskToBack`) en vez de morir, así al volver la partida sigue donde estaba.
+- El origen es `https://localhost` (el esquema de Capacitor): los ajustes y el progreso viven en
+  el `localStorage` de ese origen y sobreviven a cerrar la app.
+- Permiso `VIBRATE`: sin él el WebView ignora `navigator.vibrate` y la vibración táctil no anda.
+- `targetSdk 35` a propósito: desde 36 Android activa el «atrás predictivo» por defecto y deja
+  de llamar a `onBackPressed`; cuando se suba hay que pasar el manejo a `OnBackPressedCallback`.
+
+El juego sabe que está en la app por `Capacitor.isNativePlatform()` (`src/core/pwa.js`): esconde
+INSTALAR y PANTALLA COMPLETA, prende los controles táctiles y, la primera vez, arranca en calidad
+**movil** (ver *Render*). La app y el navegador comparten exactamente el mismo código: en un
+teléfono el juego servido desde la web se ve y se juega igual, controles incluidos.
+
+En CI (`release.yml`) el APK se arma en `ubuntu-latest` con JDK 17 y viaja al release junto con
+el instalador y el zip. Si el repo tiene los secrets `ANDROID_KEYSTORE_B64` (el `.jks` en
+base64), `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` y `ANDROID_KEY_PASSWORD`, sale firmado
+como `CARRONA-x.y.z.apk`; si no, sale `CARRONA-x.y.z-debug.apk` (firma de debug: se instala
+igual, pero una versión nueva no actualiza una instalada con otra firma).
 
 ## El core
 
@@ -648,8 +732,22 @@ muere como todos: los músculos se apagan.
   luces de tubo. Estilo minimalista con iluminación real: luna, tubos fluorescentes, linterna
   con sombras.
 - FX: sangre en decals y partículas, fogonazo, trazadoras, casquillos.
-- **Calidad adaptativa**: tres presets (`bajo` dpr 0.70, `medio` dpr 0.90 con MSAA 2, `alto`
-  dpr 1.25 con MSAA 4). Si no llega a 45 fps sostenidos baja sola un escalón.
+- **Calidad adaptativa**: cinco presets. En escritorio, `bajo` (dpr 0.70), `medio` (dpr 0.90 con
+  MSAA 2) y `alto` (dpr 1.25 con MSAA 4). Para teléfonos, `movil` no se define por dpr sino por
+  **ancho de render** (1100 px de dispositivo en cualquier pantalla, con sombras y bloom) y
+  `minimo` es el piso (900 px, sin bloom, mapas de sombra chicos: una Mali-G57 dibujaba `movil`
+  a 35 fps). Si no llega a 45 fps sostenidos baja sola un escalón, y los escalones son finos:
+  primero la **resolución dinámica** (100 → 85 → 70 % del preset, sin aviso) y recién después el
+  preset (con aviso). Nunca sube sola; el preset queda guardado y la resolución dinámica se
+  vuelve a ajustar en cada sesión (en un Redmi Note 14 Pro, `movil` al 70 % da 56 fps). `minimo`
+  conserva las sombras a propósito: apagarlas
+  cambia los programas y recompila todos los materiales (segundos congelado en un teléfono), y
+  esa caída ocurre en medio de la partida; sombras sí/no queda como decisión del usuario.
+- **La simulación va a tiempo real aunque el dibujo no llegue**: el bucle parte cada cuadro en
+  pasos de a lo sumo 1/30 s (`splitStep`, hasta tres por cuadro) y la física, la horda y los
+  proyectiles avanzan todos esos pasos; el dibujo va una vez. Antes el `dt` se capaba a 1/30 y un
+  teléfono a 25 fps corría al 80 % de velocidad, al 100 % cuando repuntaba: «se mueve lento y
+  rápido». Por debajo de 10 fps se resigna a ir más lento antes que entrar en espiral.
 - **El armero** (`gunsmith.js`): dieciséis constructores paramétricos (pistola, revólver,
   subfusil, escopetas, fusiles, francotirador, ametralladora, rotativa, lanzador, energía,
   exóticas) arman cada modelo con piezas low poly biseladas y extrusiones de perfil, agrupadas
@@ -692,8 +790,10 @@ y las que lo necesitan, un zumbido continuo: el giro de la rotativa, la carga de
 ```
 index.html                 HUD, pantallas (menú, campaña, infinito, opciones, pausa, muerte, victoria), importmap
 src/main.js                arranque, la UI (pantallas, opciones generadas, marcador) y el bucle
-src/core/                  util (rng, clamp, ángulos), input con acciones configurables, i18n (es/en),
-                           versión, pwa (instalación como app, service worker)
+src/core/                  util (rng, clamp, ángulos), input con acciones configurables y la capa virtual
+                           que escriben los sticks, sticks (la matemática de los controles táctiles, sin
+                           DOM), touch (los sticks flotantes y los botones), i18n (es/en), versión,
+                           pwa (instalación como app, service worker, detección de la app nativa)
 src/phys/world.js          motor XPBD
 src/phys/skeleton.js       índices de partícula y pose de referencia
 src/phys/ragdoll.js        ragdoll activo: músculos PD, raíz virtual, marcha IK, estados, reacciones
@@ -729,8 +829,12 @@ Jugar CARRONA.bat          doble clic → launcher\carrona.ps1 (PowerShell 5.1, 
 manifest.webmanifest       nombre, íconos, pantalla completa, orientación apaisada
 sw.js                      service worker: precache versionado (los marcadores los llena el build)
 icons/                     íconos generados por tools/icons.mjs (PNG y carrona.ico)
-tools/                     icons.mjs (íconos), build.mjs (dist + zip + version.iss), zip.mjs (ZIP mínimo)
+tools/                     icons.mjs (íconos), build.mjs (dist + zip + version.iss; --android arma
+                           dist-android/www), apk.mjs (build web → cap sync → Gradle → APK), zip.mjs
 installer/carrona.iss      instalador de Inno Setup 6 (version.iss lo genera el build)
+mobile/                    la app de Android: Capacitor 6 (capacitor.config.json), el proyecto nativo
+                           (mobile/android: MainActivity inmersiva y apaisada, botón ATRÁS al juego,
+                           firma desde keystore.properties) y los orígenes de los íconos (mobile/assets)
 .github/workflows/         release.yml: build + instalador + release al pushear un tag vX.Y.Z
 serve.py                   servidor de desarrollo (localhost:8765, --dir, --no-open)
 test/                      suites en Node y arneses de navegador
@@ -743,7 +847,7 @@ Las suites corren en Node sin navegador y miden comportamiento físico real: dis
 tiempos, velocidades.
 
 ```
-npm test                       # las dieciocho suites
+npm test                       # las diecinueve suites
 node test/t_world.mjs          # motor: estabilidad, colisiones, expulsión suave, rendimiento
 node test/t_ragdoll.mjs        # ragdoll: de pie, marcha a 1.4 m/s, muerte, desmembrado, 40 cuerpos
 node test/t_nav.mjs            # campo de flujo, muebles trepables
@@ -776,7 +880,11 @@ node test/t_arsenal.mjs        # el arsenal: contrato del catálogo, ranuras, r�
                                # relámpago, proyectiles directos y en parábola, explosiones, chorro,
                                # onda, vórtice), estados, atlas, sonido, textos, un programa de shader
                                # para todas las armas y el horno de texturas (142 pruebas)
-node test/t_build.mjs          # el build: dist, precache exacto, zip, lanzador, íconos, serve.py, CI
+node test/t_touch.mjs          # controles táctiles: zona muerta y saturación del stick, histéresis de
+                               # correr y disparar (un dedo que tiembla no hace ráfagas), ejes de cámara,
+                               # ayuda de puntería, la capa virtual de Input, opciones y la calidad «movil»
+node test/t_build.mjs          # el build: dist, precache exacto, zip, lanzador, íconos, serve.py, CI, y la
+                               # app de Android (build --android, Capacitor, MainActivity, Gradle, apk.mjs)
 ```
 
 Ejemplos de lo que se comprueba: que las quince levantadas terminan de pie desde su pose exacta

@@ -1,0 +1,13 @@
+{
+  "appId": "com.agustinyarrus.carrona",
+  "appName": "CARRONA",
+  "webDir": "../dist-android/www",
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "backgroundColor": "#06070aff",
+    "allowMixedContent": false,
+    "webContentsDebuggingEnabled": true
+  }
+}

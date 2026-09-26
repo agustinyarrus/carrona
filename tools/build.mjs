@@ -21,6 +21,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 // lo que se copia a dist (archivos o carpetas, relativo a la raíz del repo)
 const PAYLOAD = ['index.html', 'src', 'vendor', 'LICENSE', 'launcher', 'icons', 'manifest.webmanifest', 'Jugar CARRONA.bat'];
+// la app Android (mobile/, Capacitor) lleva sólo el juego: sin lanzador, sin .bat, sin service worker
+// (el WebView sirve los archivos desde la app; no hay nada que cachear ni que instalar)
+const PAYLOAD_ANDROID = ['index.html', 'src', 'vendor', 'LICENSE', 'icons', 'manifest.webmanifest'];
 // basura de sistema que nunca se copia
 const JUNK = new Set(['Thumbs.db', '.DS_Store', 'desktop.ini']);
 
@@ -114,8 +117,35 @@ export function build({ out = path.join(ROOT, 'dist'), log = console.log } = {})
   return { version, out, files, bytes, precache, zip: path.join(out, zipName) };
 }
 
+/**
+ * Los archivos web de la app Android en `out` (por defecto dist-android/www, el webDir de
+ * mobile/capacitor.config.json): el juego tal cual, sin la meta carrona-build (así pwa.js no
+ * registra el service worker) y con <meta name="carrona-platform" content="android">.
+ * Determinista. O(archivos).
+ */
+export function buildAndroid({ out = path.join(ROOT, 'dist-android', 'www'), log = console.log } = {}) {
+  const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+  fs.rmSync(out, { recursive: true, force: true });
+  fs.mkdirSync(out, { recursive: true });
+  for (const item of PAYLOAD_ANDROID) {
+    const src = path.join(ROOT, item);
+    if (!fs.existsSync(src)) throw new Error(`falta ${item}`);
+    copyInto(src, path.join(out, item));
+  }
+  const indexPath = path.join(out, 'index.html');
+  let html = fs.readFileSync(indexPath, 'utf8');
+  if (!html.includes('<meta name="theme-color"')) throw new Error('index.html no tiene la meta theme-color (ancla de la meta de plataforma)');
+  html = html.replace('<meta name="theme-color"', `<meta name="carrona-platform" content="android">
+<meta name="theme-color"`);
+  fs.writeFileSync(indexPath, html);
+  const files = walk(out);
+  log(`  android: ${files.length} archivos en ${path.relative(ROOT, out)} (versión ${pkg.version})`);
+  return { out, files, version: pkg.version };
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);
+  if (args.includes('--android')) { buildAndroid(); process.exit(0); }
   const i = args.indexOf('--out');
   const out = i >= 0 && args[i + 1] ? path.resolve(args[i + 1]) : path.join(ROOT, 'dist');
   try {

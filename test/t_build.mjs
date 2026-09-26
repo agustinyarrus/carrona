@@ -267,8 +267,45 @@ ok('carrona.iss: por usuario, excluye el zip, español, borra %LOCALAPPDATA%\\CA
 
 const wf = read(R('.github', 'workflows', 'release.yml'));
 ok('release.yml: windows-latest, icons, test, build, ISCC, artefactos y release', /windows-latest/.test(wf) && /tools\/icons\.mjs/.test(wf) && /npm test/.test(wf) && /tools\/build\.mjs/.test(wf) && /ISCC\.exe/.test(wf) && /upload-artifact@v4/.test(wf) && /gh release create/.test(wf));
+ok('release.yml: el APK se arma en ubuntu-latest (JDK 17, tools/apk.mjs, firma desde secrets) y viaja al release', /ubuntu-latest/.test(wf) && /actions\/setup-java@v4/.test(wf) && /java-version: 17/.test(wf) && /tools\/apk\.mjs/.test(wf) && /ANDROID_KEYSTORE_B64/.test(wf) && /needs: android/.test(wf) && /download-artifact@v4/.test(wf) && /dist\/\*\.apk/.test(wf) && /\*\.exe, \*\.zip, \*\.apk/.test(wf));
 const uses = [...wf.matchAll(/uses:\s*(\S+)/g)].map((m) => m[1]);
 ok('release.yml: sólo acciones de primera parte (actions/*)', uses.length >= 3 && uses.every((u) => u.startsWith('actions/')), uses.join(' '));
+
+
+// ── la app Android: el build de los archivos web y el envoltorio de Capacitor ──
+{
+  const { buildAndroid } = await import('../tools/build.mjs');
+  const outA = path.join(process.cwd(), 'dist-android', 'www');
+  const ra = buildAndroid({ out: outA, log: () => {} });
+  const A = (...p) => path.join(outA, ...p);
+  ok('android: index.html, src, vendor, icons, manifest y LICENSE', ['index.html', 'src/main.js', 'vendor/three/three.module.js', 'icons/icon-512.png', 'manifest.webmanifest', 'LICENSE'].every(f => fs.existsSync(A(...f.split('/')))));
+  ok('android: sin lanzador, .bat ni service worker (el WebView sirve los archivos)', !fs.existsSync(A('sw.js')) && !fs.existsSync(A('launcher')) && !ra.files.some(f => f.endsWith('.bat')));
+  const ihtml = fs.readFileSync(A('index.html'), 'utf8');
+  ok('android: index.html lleva la meta de plataforma y NO la de build (nada de service worker)', /<meta name="carrona-platform" content="android">/.test(ihtml) && !/carrona-build/.test(ihtml));
+  ok('android: mismos archivos de src/ que el juego', walk(path.join(process.cwd(), 'src')).every(f => ra.files.includes('src/' + f)));
+  const capPath = path.join(process.cwd(), 'mobile', 'capacitor.config.json');
+  ok('mobile/capacitor.config.json existe', fs.existsSync(capPath));
+  if (fs.existsSync(capPath)) {
+    const cap = JSON.parse(fs.readFileSync(capPath, 'utf8'));
+    ok('capacitor: appId, nombre, webDir apuntando al build android y esquema https', cap.appId === 'com.agustinyarrus.carrona' && cap.appName === 'CARRONA' && cap.webDir === '../dist-android/www' && cap.server && cap.server.androidScheme === 'https');
+    ok('capacitor: fondo del color del juego', cap.android && /^#06070a/i.test(cap.android.backgroundColor || ''));
+  }
+  const mainAct = path.join(process.cwd(), 'mobile', 'android', 'app', 'src', 'main', 'java', 'com', 'agustinyarrus', 'carrona', 'MainActivity.java');
+  if (fs.existsSync(mainAct)) {
+    const src = fs.readFileSync(mainAct, 'utf8');
+    ok('MainActivity: inmersivo, pantalla siempre prendida y el botón ATRÁS va al juego', /hide\(WindowInsetsCompat\.Type\.systemBars\(\)\)/.test(src) && /FLAG_KEEP_SCREEN_ON/.test(src) && /carrona\.backButton\(\)/.test(src) && /moveTaskToBack/.test(src));
+    const man = fs.readFileSync(path.join(process.cwd(), 'mobile', 'android', 'app', 'src', 'main', 'AndroidManifest.xml'), 'utf8');
+    ok('Manifest: apaisado (sensorLandscape)', /android:screenOrientation="sensorLandscape"/.test(man));
+    const vars = fs.readFileSync(path.join(process.cwd(), 'mobile', 'android', 'variables.gradle'), 'utf8');
+    ok('Gradle: minSdk 24, compile/target 35 (Play Store)', /minSdkVersion = 24/.test(vars) && /compileSdkVersion = 35/.test(vars) && /targetSdkVersion = 35/.test(vars));
+    const appG = fs.readFileSync(path.join(process.cwd(), 'mobile', 'android', 'app', 'build.gradle'), 'utf8');
+    ok('la versión de la app sale del package.json del juego (una sola fuente)', /JsonSlurper\(\)\.parse\(rootProject\.file\('\.\.\/\.\.\/package\.json'\)\)\.version/.test(appG) && /versionName gameVersion/.test(appG) && /versionCode gameVersionCode/.test(appG));
+    ok('firma de release desde keystore.properties (fuera del repo); debug no pide nada', /keystore\.properties/.test(appG) && /signingConfigs\s*\{\s*release/.test(appG) && /signingConfig signingConfigs\.release/.test(appG));
+    ok('tools/apk.mjs: build web → cap sync → Gradle, --release/--install/--run, local.properties con barras normales', (() => { const a = read(R('tools', 'apk.mjs')); return /buildAndroid\(/.test(a) && /'sync', 'android'/.test(a) && /assembleRelease/.test(a) && /assembleDebug/.test(a) && /--install/.test(a) && /--run/.test(a) && /split\(path\.sep\)\.join\('\/'\)/.test(a); })());
+    const gi = fs.readFileSync(path.join(process.cwd(), 'mobile', '.gitignore'), 'utf8');
+    ok('mobile/.gitignore: node_modules, builds, keystore y local.properties afuera', /node_modules/.test(gi) && /app\/build/.test(gi) && /\*\.jks/.test(gi) && /local\.properties/.test(gi));
+  }
+}
 
 console.log(fails ? `\n${fails} PRUEBAS FALLARON` : '\nTODO VERDE');
 process.exit(fails ? 1 : 0);

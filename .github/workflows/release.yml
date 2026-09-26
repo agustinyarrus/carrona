@@ -1,6 +1,7 @@
-# Release de CARRONA: al pushear un tag vX.Y.Z (o a mano) arma dist/, compila el
-# instalador con Inno Setup (viene en windows-latest) y publica el .exe y el zip
-# portable como artefactos y, en los tags, como release de GitHub.
+# Release de CARRONA: al pushear un tag vX.Y.Z (o a mano) arma el APK de Android en
+# ubuntu-latest, y en windows-latest arma dist/, compila el instalador con Inno Setup
+# (viene en el runner) y publica el .exe, el zip portable y el .apk como artefactos y,
+# en los tags, como release de GitHub.
 name: release
 
 on:
@@ -12,8 +13,60 @@ permissions:
   contents: write
 
 jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: SDK de Android (plataforma 35 y build-tools)
+        run: '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-35" "build-tools;35.0.0" "build-tools;34.0.0" > /dev/null < /dev/null'
+
+      - name: Pruebas de los controles táctiles
+        run: node test/t_touch.mjs
+
+      - name: Envoltorio (Capacitor)
+        run: npm ci --prefix mobile --no-audit --no-fund
+
+      # La clave de firma vive en los secrets del repo (el .jks en base64). Sin ella sale
+      # un APK de debug: se instala igual, pero una versión nueva no pisa una firmada con otra clave.
+      - name: Clave de firma (si está en los secrets)
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          STORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > mobile/android/carrona.jks
+            printf 'storeFile=carrona.jks\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' "$STORE_PASS" "$KEY_ALIAS" "$KEY_PASS" > mobile/android/keystore.properties
+            echo "APK_FLAGS=--release" >> "$GITHUB_ENV"
+            echo "APK de release firmado con la clave del repo"
+          else
+            echo "APK_FLAGS=" >> "$GITHUB_ENV"
+            echo "sin clave de firma en los secrets: APK de debug"
+          fi
+
+      - name: APK (build web → cap sync → Gradle)
+        run: node tools/apk.mjs $APK_FLAGS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CARRONA-apk
+          path: dist-android/*.apk
+          if-no-files-found: error
+
   build:
     runs-on: windows-latest
+    needs: android
     steps:
       - uses: actions/checkout@v4
 
@@ -44,12 +97,19 @@ jobs:
         shell: pwsh
         run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\carrona.iss'
 
+      - name: El APK del job de Android
+        uses: actions/download-artifact@v4
+        with:
+          name: CARRONA-apk
+          path: dist
+
       - uses: actions/upload-artifact@v4
         with:
           name: CARRONA-${{ github.ref_name }}
           path: |
             dist/*.exe
             dist/*.zip
+            dist/*.apk
           if-no-files-found: error
 
       - name: Release de GitHub
@@ -58,5 +118,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $files = @(Get-ChildItem dist -Include *.exe, *.zip -Recurse | ForEach-Object { $_.FullName })
+          $files = @(Get-ChildItem dist -Include *.exe, *.zip, *.apk -Recurse | ForEach-Object { $_.FullName })
           gh release create "${{ github.ref_name }}" @files --title "CARRONA ${{ github.ref_name }}" --generate-notes

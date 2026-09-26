@@ -13,10 +13,13 @@ import { Input } from './core/input.js';
 import { Game } from './game/game.js';
 import { OPTIONS, OPTION_GROUPS, ACTION_ORDER, loadSettings } from './game/options.js';
 import { t, tx, fmtTime, keyName, applyDom, getLang } from './core/i18n.js';
-import { initPwa } from './core/pwa.js';
+import { initPwa, isNative } from './core/pwa.js';
+import { TouchControls, coarsePointer } from './core/touch.js';
+import { SETTINGS_KEY } from './game/options.js';
 import { Armory } from './render/armory.js';
 import { WEAPONS, RARITY, SLOTS, weaponTraits } from './game/catalog.js';
 import { VERSION } from './core/version.js';
+import { SIM } from './core/util.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -181,6 +184,7 @@ class UI {
   /** Cambió el idioma: se rehace todo lo que tiene texto. */
   relabel() {
     applyDom(document);
+    if (this.game && this.game.touch) this.game.touch.relabel(t);
     if (this.screen === 'menu' && this.game) this.showMenu(this.game.menuInfo());
     else if (this.screen === 'options') this._renderOptions();
     else if (this.screen === 'campaign') this.showCampaign();
@@ -196,8 +200,9 @@ class UI {
       cell(acc + '%', 'stat.accuracy') + cell(fmtTime(st.time), 'stat.time');
   }
 
-  /** La leyenda de teclas del menú, a partir de lo configurado. */
+  /** La leyenda de teclas del menú, a partir de lo configurado (con el dedo, una sola línea). */
   _renderLegend() {
+    if (this.game.touchMode) { this.el.keys.innerHTML = `<span class="touchline">${esc(t('keys.touch'))}</span>`; return; }
     const K = this.game.settings.keys;
     const k = (a) => `<b>${esc(keyName(K[a][0]))}</b>`;   // sin tecla muestra un guion
     const rows = [
@@ -221,8 +226,8 @@ class UI {
       const box = document.createElement('div');
       box.className = 'ogroup';
       box.innerHTML = `<h3>${t('options.group.' + group)}</h3>`;
+      for (const o of OPTIONS.filter(o => o.group === group)) box.appendChild(this._optionRow(o, o.volatile ? o.get(G) : S[o.key]));
       if (group === 'controls') this._renderKeys(box);
-      else for (const o of OPTIONS.filter(o => o.group === group)) box.appendChild(this._optionRow(o, o.volatile ? o.get(G) : S[o.key]));
       root.appendChild(box);
     }
   }
@@ -359,6 +364,7 @@ class UI {
   /** Cartel "G · CAMBIAR POR X" sobre el arma del piso (null lo esconde). */
   prompt(p, x, y) {
     const el = this.el.prompt;
+    if (this.game && this.game.touch && this._swapName !== (p ? p.name : null)) { this._swapName = p ? p.name : null; this.game.touch.setSwap(this._swapName); }
     if (!p) { if (this._promptOn) { el.classList.remove('on'); this._promptOn = false; } return; }
     const key = p.name + p.out + p.key;
     if (this._promptKey !== key) {
@@ -498,15 +504,21 @@ function armoryStats(d) {
 function boot() {
   const canvas = $('c');
   const settings = loadSettings();
+  // primera vez en un teléfono o en la app: calidad móvil (después el jugador elige)
+  let fresh = false;
+  try { fresh = localStorage.getItem(SETTINGS_KEY) === null; } catch { /* sin almacenamiento */ }
+  if (fresh && (coarsePointer() || isNative())) settings.quality = 'movil';
   const renderer = new Renderer(canvas, { quality: settings.quality });
   const audio = new GameAudio();
   const ui = new UI();
   const input = new Input(window, settings.keys);
   const game = new Game(renderer, audio, ui, input, settings);
   ui.bind(game);
+  game.touch = new TouchControls(input, { t });     // la capa táctil (se prende según la opción)
+  if (isNative()) document.body.classList.add('native');
   game.applyAllSettings();
   game.startMenu();
-  window.carrona = game;   // para depurar desde la consola
+  window.carrona = game;   // para depurar desde la consola (y el botón ATRÁS de Android: carrona.backButton())
 
   // el audio arranca con el primer gesto
   const unlock = () => { audio.init(); audio.resume(); };
@@ -522,11 +534,12 @@ function boot() {
   let hidden = false;
   document.addEventListener('visibilitychange', () => {
     hidden = document.hidden; last = performance.now();
-    if (hidden) game.pause();   // la pestaña se fue atrás: pausa (si estaba jugando)
+    if (hidden) { game.pause(); if (game.touch) game.touch.releaseAll(); }   // la pestaña se fue atrás: pausa (si estaba jugando)
   });
   let errCount = 0;
   const loop = (now) => {
-    const dt = Math.min(1 / 30, Math.max(1 / 240, (now - last) / 1000));
+    // tope de cuadro = SIM.step × SIM.maxSteps: hasta ahí la simulación se parte en pasos y sigue a tiempo real
+    const dt = Math.min(SIM.step * SIM.maxSteps, Math.max(1 / 240, (now - last) / 1000));
     last = now;
     // un error en un frame no puede matar el bucle (el juego quedaría congelado
     // con el HUD vivo): se registra y se sigue

@@ -1,0 +1,20 @@
+# dependencias del envoltorio (el juego no tiene ninguna)
+node_modules/
+npm-install.log
+gradle-debug.log
+
+# salidas del build de Android
+android/app/build/
+android/build/
+android/.gradle/
+android/capacitor-cordova-android-plugins/build/
+android/capacitor-cordova-android-plugins/.gradle/
+android/app/src/main/assets/public/
+
+# secretos: NUNCA al repo
+android/keystore.properties
+android/*.jks
+android/*.keystore
+
+# de esta máquina
+android/local.properties
