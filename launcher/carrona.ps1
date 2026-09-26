@@ -72,10 +72,23 @@ $Mime = @{
 }
 
 # ── ¿ya hay un CARRONA sirviendo en este puerto? (doble clic dos veces, o serve.py de desarrollo) ──
+# Se pregunta por IPv4 (127.0.0.1) con Host: localhost y sin proxy. Por "localhost" .NET prueba
+# primero ::1, donde serve.py no escucha, y un puerto cerrado puede tardar ~2 s en rechazar: la
+# pregunta llegó a tardar 4,9 s, vencía el plazo y se levantaba OTRO servidor en el puerto siguiente
+# (otro origen: récords y ajustes en cero). El Host queda en localhost porque http.sys sólo atiende
+# el prefijo registrado (http://localhost:PUERTO/). Sin respuesta o con otra cosa: no hay CARRONA.
 function Test-CarronaServer([int]$port) {
   try {
-    $r = Invoke-WebRequest -Uri "http://localhost:$port/__carrona" -TimeoutSec 2 -UseBasicParsing
-    return ($r.StatusCode -eq 200 -and $r.Content -match '"app"\s*:\s*"carrona"')
+    $req = [System.Net.HttpWebRequest]::Create("http://127.0.0.1:$port/__carrona")
+    $req.Host = "localhost:$port"
+    $req.Proxy = $null
+    $req.Timeout = 2000
+    $req.ReadWriteTimeout = 2000
+    $res = $req.GetResponse()
+    try {
+      $body = (New-Object System.IO.StreamReader($res.GetResponseStream())).ReadToEnd()
+      return ([int]$res.StatusCode -eq 200 -and $body -match '"app"\s*:\s*"carrona"')
+    } finally { $res.Close() }
   } catch { return $false }
 }
 

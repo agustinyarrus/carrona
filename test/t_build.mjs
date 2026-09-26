@@ -185,7 +185,10 @@ ok('ps1: abre el navegador con --app= y --user-data-dir', /--app=/.test(code) &&
 ok('ps1: --no-first-run, --no-default-browser-check y msEdgeFirstRunExperience', /--no-first-run/.test(code) && /--no-default-browser-check/.test(code) && /msEdgeFirstRunExperience/.test(code));
 ok('ps1: busca msedge.exe y chrome.exe en App Paths (HKLM, HKCU, WOW6432Node)', /App Paths/.test(code) && /msedge\.exe/.test(code) && /chrome\.exe/.test(code) && /HKEY_CURRENT_USER/.test(code) && /WOW6432Node/.test(code));
 ok('ps1: /__carrona y /__bye', /__carrona/.test(code) && /__bye/.test(code));
-ok('ps1: sonda de segunda instancia con Invoke-WebRequest y timeout 2 s', /Invoke-WebRequest[^\n]*-TimeoutSec 2/.test(code));
+// la sonda va por IPv4 con Host: localhost (http.sys sólo atiende ese prefijo) y sin proxy: por "localhost" a secas
+// se probaba primero ::1, donde serve.py no escucha, y la respuesta llegaba a los 4,9 s con un plazo de 2
+ok('ps1: sonda de segunda instancia por 127.0.0.1 con Host: localhost, sin proxy y plazo de 2 s',
+  /127\.0\.0\.1:\$port\/__carrona/.test(code) && /\.Host = "localhost:\$port"/.test(code) && /\.Proxy = \$null/.test(code) && /\.Timeout = 2000/.test(code));
 ok('ps1: MIME text/javascript y application/manifest+json', /'\.js' = 'text\/javascript'/.test(code) && /'\.mjs' = 'text\/javascript'/.test(code) && /'\.webmanifest' = 'application\/manifest\+json'/.test(code));
 ok('ps1: MIME html, css, json, png, ico, svg, txt, md', ['.html', '.css', '.json', '.png', '.ico', '.svg', '.txt', '.md'].every((e) => code.includes(`'${e}' = `)));
 ok('ps1: rechaza .. y sirve / como index.html', /Contains\('\.\.'\)/.test(code) && /'\/index\.html'/.test(code));
