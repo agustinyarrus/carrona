@@ -1,7 +1,7 @@
 {
   "name": "carrona-mobile",
   "private": true,
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "CARRONA para Android: el juego web empaquetado con Capacitor (el juego en sí no tiene dependencias; esto es sólo el envoltorio)",
   "scripts": {
     "apk": "node ../tools/apk.mjs",

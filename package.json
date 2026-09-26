@@ -1,6 +1,6 @@
 {
   "name": "carrona",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "private": true,
   "type": "module",
   "description": "Zombis top-down con ragdoll activo: física XPBD propia, músculos PD, marcha por IK, cinco lugares, campaña de misiones y modo infinito, en Three.js",

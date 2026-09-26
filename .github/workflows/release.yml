@@ -27,8 +27,8 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: SDK de Android (plataforma 35 y build-tools)
-        run: '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-35" "build-tools;35.0.0" "build-tools;34.0.0" > /dev/null < /dev/null'
+      - name: SDK de Android (plataforma 36 y build-tools)
+        run: '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-36" "build-tools;36.0.0" "build-tools;34.0.0" > /dev/null < /dev/null'
 
       - name: Pruebas de los controles táctiles
         run: node test/t_touch.mjs

@@ -1,7 +1,10 @@
 ext {
     minSdkVersion = 24
-    compileSdkVersion = 35
-    targetSdkVersion = 35
+    // Google Play exige targetSdk 36 (Android 16) para publicar (visto el 26-sep-2026: con 35 la vista
+    // previa de la versión da error). Con 36 el sistema ya no llama a onBackPressed: MainActivity
+    // registra un OnBackPressedCallback, y el manifest conserva el bloqueo apaisado en pantallas grandes.
+    compileSdkVersion = 36
+    targetSdkVersion = 36
     androidxActivityVersion = '1.8.0'
     androidxAppCompatVersion = '1.6.1'
     androidxCoordinatorLayoutVersion = '1.2.0'

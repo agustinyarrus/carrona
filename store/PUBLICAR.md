@@ -71,6 +71,12 @@ Contestar en este orden; los valores son los que corresponden a este juego tal c
   bien en tablets.
 - **Traducciones** → Agregar idioma → **Inglés (Estados Unidos)** y pegar `store/en-US/*.txt`.
 - Guardar.
+- 🚨 En el nombre y la descripción breve no puede haber palabras que suenen a ranking o rendimiento
+  de la tienda («top», «best», «#1», «nuevo», «gratis»): «Top-down» disparó la advertencia *«es
+  posible que tu app no se promocione»* en los dos idiomas. Por eso quedaron «Shooter de zombis…» y
+  «Twin-stick…». La advertencia se recalcula recién al guardar.
+- Las capturas se agregan en el orden en que terminaron de subir; se reordenan arrastrando la
+  miniatura (soltarla sobre la mitad de arriba de la posición k la deja en el lugar k).
 
 ## 5. Integridad de la app (Configuración → Integridad de la app)
 
@@ -84,16 +90,29 @@ Contestar en este orden; los valores son los que corresponden a este juego tal c
 
 ## 6. Subir la versión
 
-Producción (o **Pruebas → Prueba cerrada** si la cuenta es nueva):
+Producción (o **Pruebas → Prueba cerrada** si la cuenta es nueva; conviene armar también una
+**Prueba interna**: no pasa por revisión y el enlace de instalación sale al momento):
+
+- 🚨 **Play exige `targetSdk 36` (Android 16)**: con 35 la vista previa de la versión muestra el error
+  *«la app se orienta al nivel de API 35 … debe estar orientada, por lo menos, al nivel de API 36»* y no
+  deja guardar. El envoltorio ya está en 36 (`mobile/android/variables.gradle`); por eso el botón ATRÁS
+  va por `OnBackPressedCallback` (con 36, Android 16 no llama a `onBackPressed`) y el manifest lleva
+  `PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY` para que el bloqueo apaisado siga valiendo en tablets.
+- 🚨 Cada AAB que se sube consume su `versionCode` aunque la versión se descarte: para volver a subir
+  hay que subir el parche (2.1.0 → 2.1.1). La advertencia «no hay archivo de desofuscación» es
+  inofensiva: el envoltorio no usa R8.
 
 1. **Países/regiones** → Agregar países → **Todos** (o los que quieras).
-2. **Crear nueva versión** → subir `dist-android/CARRONA-x.y.z.aab`.
-3. Nombre de la versión: la sugiere Play a partir del AAB (`2.1.0`).
-4. Notas de la versión: `store/listing.json` → `releaseNotes` (es-419 y en-US).
-5. **Siguiente → Guardar → Ir a la descripción general de la publicación → Enviar para revisión**.
+2. **Verificadores** (sólo pruebas): una lista de correos (`CARRONA testers`) y el correo para comentarios.
+3. **Crear nueva versión** → subir `dist-android/CARRONA-x.y.z.aab`.
+4. Nombre de la versión: la sugiere Play a partir del AAB (`20101 (2.1.1)`).
+5. Notas de la versión: `store/listing.json` → `releaseNotes` (es-419 y en-US), con las etiquetas
+   `<es-419>…</es-419>` y `<en-US>…</en-US>`.
+6. **Siguiente → Guardar → Ir a la descripción general de la publicación → Enviar para revisión**.
 
-Cada versión nueva: subir `package.json` (`x.y.z`), `src/core/version.js`, `node tools/apk.mjs --aab`
-(el `versionCode` sale solo de la versión: 2.1.0 → 20100, 2.1.1 → 20101) y repetir el paso 6.
+Cada versión nueva: subir `package.json` (`x.y.z`), `mobile/package.json`, `src/core/version.js`,
+`node tools/apk.mjs --aab` (el `versionCode` sale solo de la versión: 2.1.1 → 20101, 2.1.2 → 20102) y
+repetir el paso 6.
 
 ## 7. Con la API (opcional, para no clickear la ficha cada vez)
 

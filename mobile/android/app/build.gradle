@@ -57,6 +57,8 @@ repositories {
 dependencies {
     implementation fileTree(include: ['*.jar'], dir: 'libs')
     implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    // OnBackPressedCallback de MainActivity (el botón ATRÁS con targetSdk 36); appcompat ya lo trae, pero se usa directo
+    implementation "androidx.activity:activity:$androidxActivityVersion"
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')

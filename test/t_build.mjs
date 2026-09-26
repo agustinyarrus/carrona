@@ -293,11 +293,11 @@ ok('release.yml: sólo acciones de primera parte (actions/*)', uses.length >= 3 
   const mainAct = path.join(process.cwd(), 'mobile', 'android', 'app', 'src', 'main', 'java', 'com', 'agustinyarrus', 'carrona', 'MainActivity.java');
   if (fs.existsSync(mainAct)) {
     const src = fs.readFileSync(mainAct, 'utf8');
-    ok('MainActivity: inmersivo, pantalla siempre prendida y el botón ATRÁS va al juego', /hide\(WindowInsetsCompat\.Type\.systemBars\(\)\)/.test(src) && /FLAG_KEEP_SCREEN_ON/.test(src) && /carrona\.backButton\(\)/.test(src) && /moveTaskToBack/.test(src));
+    ok('MainActivity: inmersivo, pantalla siempre prendida y el botón ATRÁS va al juego por OnBackPressedCallback (con targetSdk 36 el sistema ya no llama a onBackPressed)', /hide\(WindowInsetsCompat\.Type\.systemBars\(\)\)/.test(src) && /FLAG_KEEP_SCREEN_ON/.test(src) && /carrona\.backButton\(\)/.test(src) && /moveTaskToBack/.test(src) && /getOnBackPressedDispatcher\(\)\.addCallback/.test(src) && !/void onBackPressed\(\)/.test(src));
     const man = fs.readFileSync(path.join(process.cwd(), 'mobile', 'android', 'app', 'src', 'main', 'AndroidManifest.xml'), 'utf8');
-    ok('Manifest: apaisado (sensorLandscape)', /android:screenOrientation="sensorLandscape"/.test(man));
+    ok('Manifest: apaisado (sensorLandscape), el bloqueo se conserva en pantallas grandes con Android 16 y ATRÁS por OnBackInvoked', /android:screenOrientation="sensorLandscape"/.test(man) && /PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY"\s+android:value="true"/.test(man) && /android:enableOnBackInvokedCallback="true"/.test(man));
     const vars = fs.readFileSync(path.join(process.cwd(), 'mobile', 'android', 'variables.gradle'), 'utf8');
-    ok('Gradle: minSdk 24, compile/target 35 (Play Store)', /minSdkVersion = 24/.test(vars) && /compileSdkVersion = 35/.test(vars) && /targetSdkVersion = 35/.test(vars));
+    ok('Gradle: minSdk 24, compile/target 36 (lo que Play exige desde 2026)', /minSdkVersion = 24/.test(vars) && /compileSdkVersion = 36/.test(vars) && /targetSdkVersion = 36/.test(vars));
     const appG = fs.readFileSync(path.join(process.cwd(), 'mobile', 'android', 'app', 'build.gradle'), 'utf8');
     ok('la versión de la app sale del package.json del juego (una sola fuente)', /JsonSlurper\(\)\.parse\(rootProject\.file\('\.\.\/\.\.\/package\.json'\)\)\.version/.test(appG) && /versionName gameVersion/.test(appG) && /versionCode gameVersionCode/.test(appG));
     ok('firma de release desde keystore.properties (fuera del repo); debug no pide nada', /keystore\.properties/.test(appG) && /signingConfigs\s*\{\s*release/.test(appG) && /signingConfig signingConfigs\.release/.test(appG));

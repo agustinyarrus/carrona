@@ -1,1 +1,1 @@
-Top-down zombie shooter with real ragdoll physics: 104 weapons, 5 places.
+Twin-stick zombie shooter with real ragdoll physics: 104 weapons, 5 places.

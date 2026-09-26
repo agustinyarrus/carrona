@@ -374,8 +374,11 @@ Lo que hace la app además de mostrar el juego (`MainActivity.java`, sesenta lí
 - El origen es `https://localhost` (el esquema de Capacitor): los ajustes y el progreso viven en
   el `localStorage` de ese origen y sobreviven a cerrar la app.
 - Permiso `VIBRATE`: sin él el WebView ignora `navigator.vibrate` y la vibración táctil no anda.
-- `targetSdk 35` a propósito: desde 36 Android activa el «atrás predictivo» por defecto y deja
-  de llamar a `onBackPressed`; cuando se suba hay que pasar el manejo a `OnBackPressedCallback`.
+- `targetSdk 36` (lo que Google Play exige para publicar): con 36, Android 16 activa el «atrás
+  predictivo» por defecto y deja de llamar a `onBackPressed`, así que ATRÁS se atiende con un
+  `OnBackPressedCallback` del despachador de AndroidX (el mismo camino en todas las versiones). Y
+  como Android 16 ignora el bloqueo de orientación en pantallas de 600 dp o más, la activity lleva
+  la propiedad `PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY` para seguir apaisada en tablets.
 
 El juego sabe que está en la app por `Capacitor.isNativePlatform()` (`src/core/pwa.js`): esconde
 INSTALAR y PANTALLA COMPLETA, prende los controles táctiles y, la primera vez, arranca en calidad

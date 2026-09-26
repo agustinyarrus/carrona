@@ -3,7 +3,7 @@
 //  API v3), sin dependencias: JWT RS256 con node:crypto, `fetch` y una edición
 //  transaccional (todo o nada: si algo falla, la edición no se confirma y Play queda igual).
 //    node tools/play.mjs --listing --images            # textos, ícono, gráfico destacado y capturas
-//    node tools/play.mjs --upload dist-android/CARRONA-2.1.0.aab --track internal [--status completed|draft]
+//    node tools/play.mjs --upload dist-android/CARRONA-2.1.1.aab --track internal [--status completed|draft]
 //    node tools/play.mjs --status                       # qué hay en cada pista
 //    node tools/play.mjs --dry-run …                    # el plan, sin tocar nada
 //    node tools/play.mjs --selftest                     # firma y verifica un JWT sin red
