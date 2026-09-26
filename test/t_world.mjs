@@ -102,6 +102,14 @@ const ok = (name, cond, extra = '') => {
   // saltear el propio cuerpo
   const skip = w.raycastBones(-5, 2, 0, 1, 0, 0, 20, out, fakeBody);
   ok('skipBody funciona', !skip);
+  // saltear un conjunto: detrás del primero aparece el segundo
+  const c = w.addParticle(3, 2, -0.5, 1, 0.1, 1), d = w.addParticle(3, 2, 0.5, 1, 0.1, 1);
+  const behind = { name: 'detrás' };
+  w.addBone(c, d, 0.12, 100, behind, 0);
+  const viaSet = w.raycastBones(-5, 2, 0, 1, 0, 0, 20, out, null, new Set([fakeBody]));
+  ok('skipSet saltea al atravesado y encuentra al de atrás', viaSet && out.body === behind && Math.abs(out.t - (8 - 0.12)) < 0.02, viaSet ? out.t.toFixed(3) : '');
+  ok('skipSet vacío no cambia nada', w.raycastBones(-5, 2, 0, 1, 0, 0, 20, out, null, new Set()) && out.body === fakeBody);
+  ok('skipSet con los dos: nada', !w.raycastBones(-5, 2, 0, 1, 0, 0, 20, out, null, new Set([fakeBody, behind])));
 }
 
 // ── 8. raycast estático + linea de vision ────────────────────────────────────

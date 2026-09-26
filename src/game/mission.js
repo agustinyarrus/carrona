@@ -138,6 +138,21 @@ export function infiniteMission(mapId) {
     start: { weapons: ['pistol'] }, sleepers: 9, waves: WAVES_CLASSIC, objectives: [] };
 }
 
+/**
+ * El polígono (desde la armería): el arma elegida en la mano, la pistola de
+ * respaldo, la oficina con horda liviana y sin premios; no cuenta para nada.
+ */
+export function rangeMission(key) {
+  const weapons = key === 'pistol' ? ['pistol'] : ['pistol', key];
+  return {
+    id: 'range_' + key, mapId: 'office', practice: true, name: es_en('POLÍGONO', 'RANGE'),
+    brief: es_en('Probá el arma todo lo que quieras.', 'Try the weapon as long as you like.'),
+    start: { weapons, hold: key }, sleepers: 8,
+    waves: { ...WAVES_LIGHT, rewards: false, firstDelay: 3, stampede: { from: 3, first: [40, 60], every: [50, 70], count: (n) => 4 + n } },
+    objectives: [],
+  };
+}
+
 /** Objetos que se juntan en las misiones: color del brillo y nombre corto. */
 export const ITEM_STYLE = {
   'item.fuel': { color: 0xff7a2a },

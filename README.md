@@ -11,9 +11,12 @@ seiscientas combinaciones de estilo de marcha. Uno de cada cinco zombis pega sal
 cada diez hacen parkour.
 Cinco lugares (la oficina, el estacionamiento, el supermercado, la estación, el hospital), una
 campaña de ocho misiones con progreso guardado, modo infinito, menú y opciones completas, en
-castellano y en inglés. Un `index.html`, módulos ES, Three.js vendorizado. Cero dependencias que
-instalar, cero archivos de textura o de sonido: todo es procedural. Para Windows hay instalador y
-zip portable sin dependencias; en el navegador se instala como app.
+castellano y en inglés. **Ciento cuatro armas** con modelo 3D y texturas propias, cada una con su
+tiro: balas, rayos, rieles, relámpagos en cadena, cohetes que buscan, arpones que se clavan,
+granadas, lanzallamas, frío, ácido, ondas y vórtices; una armería donde cada una dispara en vivo y
+un polígono para probarlas. Un `index.html`, módulos ES, Three.js vendorizado. Cero dependencias
+que instalar, cero archivos de textura o de sonido: todo es procedural. Para Windows hay
+instalador y zip portable sin dependencias; en el navegador se instala como app.
 
 ![JavaScript](https://img.shields.io/badge/JavaScript-ES2022-F7DF1E?logo=javascript&logoColor=black)
 ![Three.js](https://img.shields.io/badge/Three.js-r160-000000?logo=three.js&logoColor=white)
@@ -171,6 +174,53 @@ estampidas seguidas. El **modo infinito** son las oleadas sin fin de siempre, en
 donde ya hayas cumplido una misión (la oficina está abierta desde el principio); guarda la mejor
 oleada y las bajas por mapa.
 
+### El arsenal
+
+<div align="center">
+
+| ![arsenal](docs/arsenal.jpg) | ![polígono](docs/poligono.jpg) |
+|:--:|:--:|
+| la armería: cada arma dispara en vivo contra un blanco de acero | el polígono: micro cohetes que buscan |
+
+</div>
+
+Ciento cuatro armas: las cuatro clásicas de siempre (pistola, subfusil, escopeta y fusil, con sus
+números intactos) y cien nuevas con nombre de cerro, viento, estrella, bicho o leyenda: HALCÓN,
+JEJÉN, YAGUARETÉ, CERRO TORRE, PAMPERO, ZONDA, CRUZ DEL SUR, AURORA, CURUPÍ, LUZ MALA, POMBERO,
+MANDINGA, HURACÁN. Catorce familias repartidas en cinco ranuras (de mano, subfusiles, escopetas,
+fusiles y pesadas) y cinco rarezas, cada una con su color en el cartel, el HUD y la armería.
+
+| Tiro | Qué hace |
+|---|---|
+| **bala** | hitscan contra huesos: perdigones, perforación, rebote en las paredes, balas explosivas, silenciador, robo de vida |
+| **rayo** | láser continuo o de pulsos, perfora, con batería que se recarga sola (y se recalienta si se abusa) |
+| **riel** | carga y atraviesa todo lo que tenga en la línea, con una hélice de luz |
+| **relámpago** | busca al zombi más cercano en un cono y salta de uno a otro, sacudiéndolos |
+| **proyectil** | con física: cohetes que aceleran, micro cohetes que buscan, granadas que rebotan, racimo, bombas pegajosas, virotes y arpones que se clavan, discos que rebotan en las paredes, bengalas, clavos, esferas de plasma, ácido, vórtices que chupan todo |
+| **chorro** | fuego o frío en cono; la pared lo corta |
+| **onda** | sónica: empuja y tumba |
+
+Lo que queda después del tiro: **fuego** (daño por segundo, el cuerpo se carboniza), **frío** (lo
+frena; lleno, lo congela y el próximo tiro lo quiebra con 50 % más), **choque** (se sacude y pierde
+el control) y **ácido** (daño por segundo y 25 % más de todo lo demás). El fuego apaga el frío.
+Los proyectiles saben cómo apuntar: las granadas, el ácido, las pegajosas y los vórtices caen en
+parábola donde está el mouse; los arpones, virotes, bengalas y cohetes van derecho a la altura
+del torso, con la gravedad compensada (un arpón apuntado al primero de una fila atraviesa a dos
+y se clava en el tercero).
+
+Arrancás con la pistola. Entre oleadas siguen cayendo las clásicas en su oleada de siempre, y
+además una del arsenal sorteada por rareza (las raras se abren a medida que avanzan las
+oleadas); los brutos sueltan armas y, muy de vez en cuando, un zombi común también. Cada arma
+va a su ranura: si está libre se levanta sola; si está ocupada aparece un cartel y **G** la
+cambia (la tuya queda en el piso con las balas que tenía). La colección se guarda: la armería
+muestra cuántas encontraste.
+
+La **armería** (ARSENAL en el menú) tiene las 104 en miniaturas 3D que se pintan de a poco, filtros
+por ranura, estadísticas y rasgos, y una vista previa en vivo donde el arma elegida dispara contra
+un blanco de acero con la misma balística del juego (se gira arrastrando y se acerca con la
+rueda). **Probar en el polígono** la lleva a la oficina con una horda liviana: la práctica no
+cuenta para ningún récord.
+
 ### Menú y opciones
 
 <div align="center">
@@ -181,8 +231,8 @@ oleada y las bajas por mapa.
 
 </div>
 
-El menú es de botones: CONTINUAR (la próxima misión pendiente), CAMPAÑA, INFINITO, OPCIONES,
-PANTALLA COMPLETA y, cuando el navegador lo ofrece, INSTALAR. Un clic sobre una pantalla nunca
+El menú es de botones: CONTINUAR (la próxima misión pendiente), CAMPAÑA, INFINITO, ARSENAL,
+OPCIONES, PANTALLA COMPLETA y, cuando el navegador lo ofrece, INSTALAR. Un clic sobre una pantalla nunca
 llega al juego: no hay forma de arrancar una partida sin querer. Esc cierra la pantalla que esté
 arriba. Al morir: reintentar o volver al menú; al cumplir una misión: la siguiente, repetir o el
 menú. La pausa congela la simulación y el audio, y también se pausa sola si la pestaña se va atrás.
@@ -208,7 +258,8 @@ recargar.
 | C / Ctrl | agacharse. C tocada mientras corrés: **rodada de esquive** |
 | mouse | apuntar. Click dispara (mantener en las automáticas) |
 | R | recargar |
-| 1 a 4 | cambiar de arma |
+| 1 a 5 | sacar lo que haya en cada ranura (de mano, subfusiles, escopetas, fusiles, pesadas) |
+| G | agarrar el arma del piso cuando su ranura está ocupada (la tuya queda en el piso) |
 | Espacio | trepar lo que tenga adelante; corriendo sin nada adelante, **saltar**; si no, empujón. En el piso: levantarse ya |
 | Q / E | girar la cámara 45° |
 | rueda | acercar o alejar la cámara |
@@ -216,9 +267,10 @@ recargar.
 | Esc | pausa |
 | F3 | panel de rendimiento |
 
-Armas: pistola (munición infinita), subfusil desde la oleada 2, escopeta desde la 3, fusil desde
-la 5 (atraviesa un cuerpo). La cabeza recibe daño ×4. Los miembros se cortan con daño acumulado
-y sin una pierna el zombi se arrastra. Entre oleadas caen munición, botiquines y armas.
+Armas: la pistola (munición infinita) de entrada; el subfusil cae en la oleada 2, la escopeta en
+la 3 y el fusil en la 5 (atraviesa un cuerpo), y el resto del arsenal por rareza (ver *El
+arsenal*). La cabeza recibe daño ×4. Los miembros se cortan con daño acumulado y sin una pierna
+el zombi se arrastra. Entre oleadas caen munición, botiquines y armas.
 
 El jugador es **ágil**: contra una pared a toda velocidad atrapa con las manos y rebota (no se
 desarma), se lleva puesto a un zombi con el hombro sin caerse, y tirado en el piso no espera:
@@ -248,7 +300,7 @@ runner y crea el release de GitHub con el `.exe` y el zip adjuntos. Se puede lan
 
 ## El core
 
-Diez mil líneas de JavaScript sin framework. Estas son las piezas y por qué son así.
+Veinte mil líneas de JavaScript sin framework. Estas son las piezas y por qué son así.
 
 ### 1. Motor de física XPBD (`src/phys/world.js`)
 
@@ -529,11 +581,29 @@ Se despiertan cuando alguien se acerca o les pegan un tiro. Un muerto que dejó 
 congela igual: sus huesos pasan a un buffer de cadáveres y queda como obstáculo bajo, que los
 vivos tienen que sortear o pisar.
 
-### 6. Armas (`src/game/weapons.js`)
+### 6. Armas (`src/game/catalog.js`, `weapons.js`, `ballistics.js`, `status.js`)
 
 Hitscan contra huesos (cápsulas) y estáticos, con perdigones, dispersión, retroceso, caída de
 daño en la escopeta y perforación en el fusil (atraviesa un cuerpo con 60 % del daño). Cada
 hueso tiene puntos de vida propios; sólo escopeta y fusil llegan a cortar un miembro.
+
+- **El catálogo** son datos: cada arma es una entrada corta (familia, rareza, números, parámetros
+  del modelo, paleta de acabados, tiro) que se mezcla con los valores de su familia, se valida
+  UNA vez al cargar (un campo roto tira con el nombre del arma y del campo) y queda congelada.
+  Índices precomputados por ranura y por rareza; el sorteo de premios es una ruleta O(n) con
+  pesos que crecen con la oleada.
+- **El arsenal** es una máquina de estados por ranura: ráfagas, giro previo de la rotativa, carga
+  del riel, batería que se regenera y se recalienta, recarga, y el resto de la cadencia se acarrea
+  al tiro siguiente (una rotativa a 26 tiros por segundo dispara 26, no 20 por redondear al cuadro).
+- **La balística** no sabe nada del juego: el mundo le da la geometría (raycasts contra huesos y
+  estáticos, línea de visión) y un sumidero las consecuencias (daño, sangre, estados, sonido). La
+  armería usa la misma clase con un mundo de mentira: el tiro del menú es EL tiro. Los proyectiles
+  barren cada paso contra huesos y estáticos (gana el más cercano) ignorando a los que ya
+  atravesaron; el ángulo de salida sale de la fórmula balística racionalizada, sin cancelación
+  cuando la gravedad es chica. Las explosiones tienen caída cuadrática, las tapa la pared (línea
+  de visión al pecho), cortan miembros cerca del centro y empujan todo lo que tenga partículas.
+- **Los estados** (fuego, frío, choque, ácido) viven en el zombi y en un conjunto de afectados:
+  el paso cuesta O(afectados), no O(horda), y la baja por daño en el tiempo es del arma que lo prendió.
 
 | Arma | Daño | Cadencia | Cargador | Impulso |
 |---|---|---|---|---|
@@ -565,11 +635,42 @@ muere como todos: los músculos se apagan.
 - FX: sangre en decals y partículas, fogonazo, trazadoras, casquillos.
 - **Calidad adaptativa**: tres presets (`bajo` dpr 0.70, `medio` dpr 0.90 con MSAA 2, `alto`
   dpr 1.25 con MSAA 4). Si no llega a 45 fps sostenidos baja sola un escalón.
+- **El armero** (`gunsmith.js`): dieciséis constructores paramétricos (pistola, revólver,
+  subfusil, escopetas, fusiles, francotirador, ametralladora, rotativa, lanzador, energía,
+  exóticas) arman cada modelo con piezas low poly biseladas y extrusiones de perfil, agrupadas
+  por material y por parte animada (corredera, tambor, cerrojo, bomba, cañones que giran). Unos
+  1500 triángulos y 10 llamadas de dibujo por arma; el tope es 6000 y 16.
+- **Los acabados** (`finish_recipes.js`, `finishes.js`): veintisiete recetas de textura en JS
+  puro (polímero, cerakote, punteado, cepillado, parkerizado, pavonado, cromo, oro, madera,
+  carbono, camuflajes woodland, digital, tigre y jaguar, damasco, hexágonos, paneles, franjas de
+  peligro, óxido, cinta, goma, esmalte, circuito, moleteado, marfil, bronce, escarcha) con color,
+  normales, rugosidad y emisión. El ruido vive en retículas periódicas: repiten sin costura por
+  construcción. Las recetas de un solo color se calculan una vez en gris y el color va en el
+  material: las 104 armas usan 46 texturas. Se hornean en Workers mientras se mira el menú (el
+  mismo código, los mismos bytes) y se suben a la placa de a una por cuadro.
+- **Los disparos** (`shotfx.js`): fogonazos, trazadoras que viajan, estelas, rayos, hélices de
+  riel, relámpagos, chispas, bolas de fuego, ondas en el piso y humo en un lote de sprites
+  instanciado (una sola llamada de dibujo) con un atlas de formas calculado en JS; casquillos por
+  calibre y quemaduras en el piso.
+- **Ningún shader se compila jugando** (`warmup.js`). Three compila el programa de un material
+  la primera vez que lo dibuja, y en una Iris Xe un programa con veinte luces tarda 1,5 s: el
+  primer tiro congelaba la pantalla varios segundos. Ahora la topología de luces es fija (todos
+  los mapas con veinte luces puntuales, las que faltan de repuesto y apagadas; el fogonazo nunca
+  se apaga con `visible`, sólo cambia su intensidad; la niebla siempre puesta), las 104 armas
+  comparten un solo programa (los cuatro mapas siempre presentes, neutros de 1×1 donde la receta
+  no trae), y mientras se mira el menú se precompila todo en otros hilos
+  (`KHR_parallel_shader_compile`), con el mismo render target que el pase real, muestras de lo
+  que todavía no existe y un cuadro de ensayo que muestra hasta las piscinas vacías (los
+  programas de sombra no los ve `compile()`). El menú aparece enseguida y la escena entra con un
+  fundido cuando todo está listo; una partida no arranca hasta tener sus shaders. En las pruebas:
+  doce armas disparando, cero programas nuevos.
 
 ### 9. Audio (`src/audio/audio.js`)
 
 Todo sintetizado con Web Audio en tiempo real: disparos, recarga, gruñidos, impactos, ambiente.
-No hay un solo archivo de sonido.
+No hay un solo archivo de sonido. Cada arma tiene su perfil de disparo armado con capas de ruido
+filtrado, tonos, FM y chisporroteo (treinta y nueve perfiles; los de las clásicas no cambiaron),
+y las que lo necesitan, un zumbido continuo: el giro de la rotativa, la carga del riel, el chorro.
 
 ## Estructura
 
@@ -591,11 +692,21 @@ src/game/options.js        registro declarativo de opciones y teclas; validació
 src/game/nav.js            campo de flujo
 src/game/zombie.js         IA de la horda
 src/game/props.js          props rígidos que duermen
-src/game/weapons.js        armas e hitscan
+src/game/catalog.js        el catálogo: 104 armas en 14 familias, rarezas, ranuras, validación, sorteo
+src/game/weapons.js        arsenal por ranuras (ráfaga, giro previo, carga, batería) e hitscan
+src/game/ballistics.js     lo que hace un tiro: rieles, relámpagos, proyectiles, explosiones, chorros, ondas
+src/game/status.js         fuego, frío, choque y ácido
 src/game/player.js         jugador
 src/game/game.js           estados, mapas, partidas, oleadas parametrizadas, estampidas, dormidos,
                            pickups y objetivos, disparo, cadáveres, HUD, pausa, ajustes
 src/render/                renderer, materiales, cuerpos instanciados, props, FX, modelos, shaders
+src/render/gunsmith.js     el armero: modelos paramétricos de las 104 armas
+src/render/finish_recipes.js  las 27 recetas de textura (JS puro: corren en Workers y en Node)
+src/render/finishes.js     texturas y materiales de las armas, el horno en Workers, el reflejo de estudio
+src/render/finish_worker.js   el Worker del horno
+src/render/shotfx.js       los efectos de disparo (sprites instanciados, proyectiles)
+src/render/armory.js       la armería 3D: miniaturas y vista previa disparando
+src/render/warmup.js       el precompilado de shaders
 src/audio/audio.js         síntesis
 vendor/three/              Three.js r160 y los addons de postprocesado que se usan
 launcher/carrona.ps1       lanzador de Windows: HttpListener en localhost:8765 + navegador en modo app
@@ -617,7 +728,7 @@ Las suites corren en Node sin navegador y miden comportamiento físico real: dis
 tiempos, velocidades.
 
 ```
-npm test                       # las diecisiete suites
+npm test                       # las dieciocho suites
 node test/t_world.mjs          # motor: estabilidad, colisiones, expulsión suave, rendimiento
 node test/t_ragdoll.mjs        # ragdoll: de pie, marcha a 1.4 m/s, muerte, desmembrado, 40 cuerpos
 node test/t_nav.mjs            # campo de flujo, muebles trepables
@@ -636,11 +747,18 @@ node test/t_quality.mjs        # calidad biomecánica: patinaje del pie apoyado,
                                # picos de velocidad, el balance sin falsos positivos, reflejos de
                                # caída, mirada a la amenaza, deslizamiento, peso en la marcha (44)
 node test/t_maps.mjs           # los cinco lugares construidos en Node: playerStart, puertas y puntos
-                               # alcanzables, conectividad, presupuestos de dibujo, luces y física
+                               # alcanzables, conectividad, presupuestos de dibujo, luces (dentro del
+                               # tope de la topología fija) y física
 node test/t_mission.mjs        # el manager de objetivos con un juego de mentira, las oleadas, y la
                                # campaña contra los mapas reales (cada punto que pide existe y se llega)
 node test/t_progress.mjs       # progreso: desbloqueos, récords, guardado roto o viejo
 node test/t_options.mjs        # registro de opciones, ajustes viejos, teclas configurables, input, i18n
+node test/t_arsenal.mjs        # el arsenal: contrato del catálogo, ranuras, ráfagas y cadencias, acabados
+                               # deterministas y sin costura, las 104 armas armadas (sin NaN, dentro del
+                               # presupuesto), balística sobre el mundo de verdad (hitscan, riel,
+                               # relámpago, proyectiles directos y en parábola, explosiones, chorro,
+                               # onda, vórtice), estados, atlas, sonido, textos, un programa de shader
+                               # para todas las armas y el horno de texturas (142 pruebas)
 node test/t_build.mjs          # el build: dist, precache exacto, zip, lanzador, íconos, serve.py, CI
 ```
 
@@ -685,6 +803,11 @@ node test/browser_probe.mjs --all --runners --hit --player   # fps por calidad, 
 - **Los huesos también chocan**, no sólo las partículas. De ahí que un cuerpo quede colgado de
   un borde o una pierna empuje una caja.
 - **Props que duermen y cadáveres congelados**: el mundo se llena de obstáculos sin costo.
+- **Ningún shader se compila jugando.** Topología de luces fija, un programa para todas las
+  armas y precompilado en paralelo mientras se mira el menú: el primer tiro es un tiro, no una
+  pantalla congelada.
+- **El tiro del menú es EL tiro**: la armería corre la misma balística que el juego sobre un
+  mundo de mentira.
 - **Todo procedural**: el repo pesa lo que pesa el código más Three.js.
 
 ## Licencia

@@ -895,7 +895,10 @@ export class PhysWorld {
   // ═══ raycast contra huesos (cápsulas) ═════════════════════════════════════
   //  `out.s` es la posición a lo largo del hueso (0..1): con eso repartimos el
   //  impulso entre sus 2 partículas y el disparo se siente donde pegó.
-  raycastBones(ox, oy, oz, dx, dy, dz, maxT, out, skipBody = null) {
+  //  `skipBody` saltea uno (el que dispara); `skipSet` (Set o null) saltea
+  //  varios: un arpón que ya atravesó a dos busca al tercero en el mismo
+  //  barrido en vez de chocar con la espalda del segundo. O(huesos).
+  raycastBones(ox, oy, oz, dx, dy, dz, maxT, out, skipBody = null, skipSet = null) {
     let best = maxT, found = false;
     const px = this.px, py = this.py, pz = this.pz;
     const A = dx * dx + dy * dy + dz * dz;
@@ -903,7 +906,7 @@ export class PhysWorld {
     for (let i = 0; i < this.bn; i++) {
       if (!this.balive[i]) continue;
       const body = this.bbody[i];
-      if (body === skipBody) continue;
+      if (body === skipBody || (skipSet !== null && skipSet.has(body))) continue;
       const a = this.bA[i], b = this.bB[i];
       const ax = px[a], ay = py[a], az = pz[a];
       const ux = px[b] - ax, uy = py[b] - ay, uz = pz[b] - az;

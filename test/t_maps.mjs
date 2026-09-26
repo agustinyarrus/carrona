@@ -11,6 +11,7 @@ const { NavGrid } = await import('../src/game/nav.js');
 const { makeRng } = await import('../src/core/util.js');
 const { LevelBuilder } = await import('../src/game/level.js');
 const { MAPS, MAP_ORDER, getMap } = await import('../src/game/maps.js');
+const { POINT_LIGHT_BUDGET } = await import('../src/render/renderer.js');
 
 let fails = 0;
 const ok = (name, cond, extra = '') => {
@@ -56,6 +57,8 @@ for (const id of MAP_ORDER) {
   // la oficina ya venía con 19 (lámparas de escritorio al azar); los lugares nuevos entran en 14
   const maxLights = id === 'office' ? 19 : 14;
   ok(`luces puntuales ≤ ${maxLights}`, L.lights.length <= maxLights, String(L.lights.length));
+  // topología fija: el renderer completa cada mapa hasta el tope con luces de repuesto (el fogonazo ocupa una)
+  ok(`entra en el tope de la topología fija (${POINT_LIGHT_BUDGET} con el fogonazo)`, L.lights.length <= POINT_LIGHT_BUDGET - 1, `${L.lights.length} + 1`);
 
   // ── navegación ─────────────────────────────────────────────────────────────
   const t1 = performance.now();

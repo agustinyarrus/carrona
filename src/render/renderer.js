@@ -19,6 +19,7 @@ import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { GradeShader } from './shaders.js';
+import { ShaderWarmup } from './warmup.js';
 import { clamp, clamp01, damp, noise2, TAU } from '../core/util.js';
 
 //  Medido en una Iris Xe a 1686x906: "bajo" 60 fps, dpr 1.0 + MSAA 4 → 32 fps.
@@ -30,6 +31,14 @@ export const QUALITY = {
   alto:  { dpr: 1.25, msaa: 4, moonMap: 4096, flashMap: 2048, bloom: 0.5, shadows: true },
 };
 export const QUALITY_ORDER = ['bajo', 'medio', 'alto'];
+/**
+ * Luces puntuales visibles en TODOS los mapas: la oficina tiene 19 más el
+ * fogonazo. Los demás se completan con luces de repuesto apagadas (ver
+ * fixLightTopology): así comparten los mismos programas de shader.
+ */
+export const POINT_LIGHT_BUDGET = 20;
+/** Niebla de los mapas que no la piden: más allá del plano lejano (140 m), no se ve pero el programa es el mismo. */
+const FOG_NONE = Object.freeze({ near: 1000, far: 2000 });
 
 export class Renderer {
   constructor(canvas, opts = {}) {
@@ -75,9 +84,11 @@ export class Renderer {
     this.scene.add(this.flash); this.scene.add(this.flash.target);
     this.flashOn = true;
 
-    // fogonazo
+    // el fogonazo: SIEMPRE visible, apagado con intensidad 0. Prenderlo con
+    // `visible` cambiaba la cantidad de luces y recompilaba todos los materiales
+    // en el primer tiro (segundos de pantalla congelada)
     this.muzzle = new THREE.PointLight(0xffd39a, 0, 16, 2);
-    this.muzzle.visible = false;
+    this.spareLights = [];             // luces de repuesto (apagadas) que completan la cuenta de cada mapa
     this.scene.add(this.muzzle);
     this._muzzleT = 0;
 
@@ -107,7 +118,10 @@ export class Renderer {
     this.time = 0;
     this.cinematic = false; this.cineAngle = 0;
     this.lookAhead = 0.32;
+    this.scopeTarget = 0; this.scope = 0;      // mira telescópica: la cámara se adelanta más hacia el mouse
     this.shadowsOn = true;
+    this._prOverride = null;                  // la armería fuerza una resolución más alta
+    this.warmup = new ShaderWarmup(this.renderer);
 
     this.resize();
     window.addEventListener('resize', () => this.resize());
@@ -136,7 +150,7 @@ export class Renderer {
   resize() {
     const Q = QUALITY[this.qualityName];
     const w = Math.max(320, window.innerWidth), h = Math.max(240, window.innerHeight);
-    const dpr = Math.min(window.devicePixelRatio || 1, Q.dpr);
+    const dpr = this._prOverride || Math.min(window.devicePixelRatio || 1, Q.dpr);
     this.renderer.setPixelRatio(dpr);
     this.renderer.setSize(w, h, false);
     this.composer.setPixelRatio(dpr);
@@ -148,6 +162,15 @@ export class Renderer {
     this.canvas.style.width = '100%';
     this.canvas.style.height = '100%';
     this.width = w; this.height = h;
+  }
+
+  /**
+   * Resolución forzada (la armería la sube para que la vista previa se vea
+   * nítida aunque el juego esté en calidad baja); null vuelve a la de la calidad.
+   */
+  setPixelRatioOverride(pr) {
+    this._prOverride = pr || null;
+    this.resize();
   }
 
   /** Sombras sí/no (las de la luna y las de la linterna). Cambiarlo obliga a recompilar materiales. */
@@ -168,8 +191,11 @@ export class Renderer {
   /** Paleta y clima del lugarcito. */
   applyMood(m = {}) {
     if (m.background !== undefined) this.scene.background = new THREE.Color(m.background);
-    // niebla del color del fondo: los mapas grandes o sucios la piden; sin `fog` se apaga
-    this.scene.fog = m.fog ? new THREE.Fog(new THREE.Color(m.fog.color ?? m.background ?? 0x06070a), m.fog.near ?? 30, m.fog.far ?? 90) : null;
+    // niebla del color del fondo: los mapas grandes o sucios la piden. SIEMPRE hay una
+    // (prenderla o apagarla cambia el programa de todos los materiales): sin `fog`,
+    // queda más allá del plano lejano
+    const fg = m.fog || FOG_NONE;
+    this.scene.fog = new THREE.Fog(new THREE.Color(fg.color ?? m.background ?? 0x06070a), fg.near ?? 30, fg.far ?? 90);
     if (m.hemiSky !== undefined) this.hemi.color.set(m.hemiSky);
     if (m.hemiGround !== undefined) this.hemi.groundColor.set(m.hemiGround);
     if (m.hemiIntensity !== undefined) this.hemi.intensity = m.hemiIntensity;
@@ -193,12 +219,66 @@ export class Renderer {
   setDamage(d) { this.grade.uniforms.uDamage.value = clamp01(d); }
   setFade(f) { this.grade.uniforms.uFade.value = clamp01(f); }
   muzzleFlash(x, y, z, power = 1) {
-    this.muzzle.position.set(x, y + 0.05, z);
-    this.muzzle.intensity = 22 * power;
-    this.muzzle.distance = 10 * power;
-    this.muzzle.visible = true;
-    this._muzzleT = 0.06;
+    this.lightPulse(x, y, z, 0xffd39a, 22 * power, 10 * power, 0.06);
   }
+  /**
+   * Pulso de luz de color (fogonazo, rayo, explosión). Reusa la ÚNICA luz
+   * puntual del fogonazo: agregar luces cambia el shader de todos los
+   * materiales y cuesta en cada píxel. Si ya hay un pulso más fuerte, gana ése.
+   */
+  lightPulse(x, y, z, color, intensity, distance, dur = 0.07) {
+    if (this._muzzleT > 0 && this.muzzle.intensity > intensity * 1.2) return;
+    this.muzzle.position.set(x, y + 0.05, z);
+    this.muzzle.color.set(color);
+    this.muzzle.intensity = intensity;
+    this.muzzle.distance = distance;
+    this._muzzleT = dur;
+  }
+
+  // ── programas de shader: topología fija y precompilado ───────────────────
+  /**
+   * Topología de luces fija. Un programa de shader depende de CUÁNTAS luces
+   * visibles hay (no de su intensidad): cada mapa se completa con luces de
+   * repuesto apagadas hasta POINT_LIGHT_BUDGET puntuales, así lo que compila
+   * el menú vale para cualquier mapa y en la partida no se recompila nada.
+   * Devuelve cuántas de repuesto quedaron prendidas. O(nodos de la escena).
+   */
+  fixLightTopology() {
+    for (const L of this.spareLights) L.visible = false;
+    let n = 0;
+    this.scene.traverseVisible((o) => { if (o.isPointLight) n++; });
+    const need = POINT_LIGHT_BUDGET - n;
+    if (need < 0) console.warn(`mapa con ${n} luces puntuales: el tope es ${POINT_LIGHT_BUDGET} (los shaders se recompilan al entrar)`);
+    while (this.spareLights.length < need) {
+      const L = new THREE.PointLight(0x000000, 0, 0.01, 2);
+      L.name = 'repuesto';
+      L.position.set(0, -60, 0);          // bajo el piso: apagada y lejos de todo
+      this.scene.add(L);
+      this.spareLights.push(L);
+    }
+    for (let i = 0; i < this.spareLights.length; i++) this.spareLights[i].visible = i < need;
+    return Math.max(0, need);
+  }
+
+  /**
+   * Todo lo de la escena que entra en la clave de un programa de shader:
+   * luces visibles por tipo, las que dan sombra, el tipo de sombra y la
+   * niebla. Si cambia (sombras apagadas, otra calidad), lo precompilado ya
+   * no sirve y hay que volver a precompilar. O(nodos de la escena).
+   */
+  shaderTopologyKey() {
+    const c = { p: 0, s: 0, d: 0, h: 0, a: 0, sh: 0 };
+    this.scene.traverseVisible((o) => {
+      if (!o.isLight) return;
+      if (o.isPointLight) c.p++; else if (o.isSpotLight) c.s++; else if (o.isDirectionalLight) c.d++; else if (o.isHemisphereLight) c.h++; else if (o.isAmbientLight) c.a++;
+      if (o.castShadow) c.sh++;
+    });
+    const sm = this.renderer.shadowMap, f = this.scene.fog;
+    return `${c.p}p${c.s}s${c.d}d${c.h}h${c.a}a·${c.sh}sh·${sm.enabled ? sm.type : 'off'}·${f ? (f.isFogExp2 ? 'exp2' : 'lin') : 'nofog'}`;
+  }
+
+  /** Precompila la escena del juego y las muestras sueltas (ver warmup.js). */
+  warmScene(samples = [], opts = {}) { return this.warmup.run(this.scene, this.camera, samples, opts); }
 
   /** Linterna: desde dónde y hacia dónde. */
   setFlashlight(x, y, z, tx, ty, tz, intensity = 260) {
@@ -235,12 +315,14 @@ export class Renderer {
       t.x = damp(t.x, px, 0.02, dt); t.y = damp(t.y, 0.8, 0.02, dt); t.z = damp(t.z, pz, 0.02, dt);
       this.camYaw = yaw;
     } else {
-      // adelanto hacia el mouse, acotado
+      // adelanto hacia el mouse, acotado (con mira telescópica llega bastante más lejos)
+      this.scope = damp(this.scope, this.scopeTarget, 0.02, dt);
       let ax = aimX - px, az = aimZ - pz;
       const al = Math.hypot(ax, az);
-      const maxA = 4.5;
+      const maxA = 4.5 + this.scope * 8;
       if (al > maxA) { ax *= maxA / al; az *= maxA / al; }
-      const gx = px + ax * this.lookAhead, gz = pz + az * this.lookAhead;
+      const la = this.lookAhead + this.scope * 0.38;
+      const gx = px + ax * la, gz = pz + az * la;
       t.x = damp(t.x, gx, 0.0015, dt);
       t.y = damp(t.y, py, 0.0015, dt);
       t.z = damp(t.z, gz, 0.0015, dt);
@@ -311,7 +393,7 @@ export class Renderer {
     if (this._muzzleT > 0) {
       this._muzzleT -= dt;
       this.muzzle.intensity *= Math.pow(0.0002, dt);
-      if (this._muzzleT <= 0) { this.muzzle.visible = false; this.muzzle.intensity = 0; }
+      if (this._muzzleT <= 0) { this.muzzle.intensity = 0; this.muzzle.color.set(0xffd39a); }
     }
 
     // la luna sigue al objetivo para que la sombra tenga siempre resolución

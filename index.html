@@ -128,6 +128,61 @@
   #perf { position: fixed; left: 34px; bottom: 26px; white-space: pre; font-size: 11px; color: var(--dim); letter-spacing: .05em; display: none; line-height: 1.6; pointer-events: none; z-index: 5; }
   #perf.on { display: block; }
   .vig { position: fixed; inset: 0; pointer-events: none; background: radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,.35) 100%); }
+
+  /* ── HUD del arma: nombre con el color de la rareza, batería, giro, cartel de cambio ── */
+  #weapon-sub { margin-top: 3px; color: var(--dim); letter-spacing: .24em; font-size: 10px; }
+  .spwrap { width: 180px; height: 3px; background: rgba(255,255,255,.06); margin: 6px 0 0 auto; opacity: 0; transition: opacity .2s; }
+  #spin { height: 100%; width: 0; background: #89dceb; }
+  #ammo .bat { display: inline-block; width: 64px; height: 8px; border: 1px solid rgba(255,255,255,.25); vertical-align: 3px; margin-left: 6px; position: relative; }
+  #ammo .bat i { position: absolute; left: 1px; top: 1px; bottom: 1px; background: #89dceb; }
+  #ammo .hot { color: #f38ba8; font-size: 12px; letter-spacing: .3em; margin-left: 8px; }
+  #slots span.empty { opacity: .28; }
+  #prompt { position: absolute; left: 0; top: 0; display: none; transform: translate(-50%, -120%); text-align: center; pointer-events: none; white-space: nowrap; }
+  #prompt.on { display: block; }
+  #prompt .k { display: inline-block; min-width: 22px; padding: 2px 6px; border: 1px solid currentColor; margin-right: 8px; font-size: 11px; letter-spacing: 0; }
+  #prompt .n { letter-spacing: .28em; font-size: 12px; text-shadow: 0 0 8px #000; }
+  #prompt .o { display: block; margin-top: 4px; color: var(--dim); font-size: 10px; letter-spacing: .22em; text-shadow: 0 0 6px #000; }
+
+  /* ── ARSENAL: grilla de miniaturas y vista previa en vivo (el lienzo de WebGL asoma por .arm-view) ── */
+  #armory { background: transparent; justify-content: flex-start; align-items: stretch; padding: 22px 28px 20px; text-align: left; }
+  .arm-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; flex-wrap: wrap; }
+  .arm-head .title.mid { margin-left: 0; font-size: clamp(28px, 3.6vw, 52px); }
+  .arm-head .sub { margin-left: 0; margin-top: 8px; }
+  .arm-filters { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip { padding: 6px 12px; border: 1px solid var(--line); background: rgba(10,11,16,.6); color: var(--dim); font-size: 11px; letter-spacing: .2em; cursor: pointer; font-family: var(--font); font-weight: 300; }
+  .chip:hover { color: var(--fg); border-color: #3a3d48; }
+  .chip.on { color: var(--acc); border-color: rgba(255,210,74,.6); }
+  .arm-body { display: grid; grid-template-columns: minmax(300px, 1fr) minmax(420px, 1.25fr); gap: 22px; margin-top: 16px; flex: 1; min-height: 0; }
+  .arm-grid { overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; align-content: start; padding: 2px 6px 2px 2px; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+  .card { position: relative; background: rgba(12,13,18,.82); border: 1px solid var(--line); cursor: pointer; padding: 6px 8px 8px; transition: border-color .12s, background .12s; }
+  .card:hover { border-color: #3a3d48; background: rgba(18,19,26,.9); }
+  .card.sel { border-color: var(--rc, var(--acc)); box-shadow: inset 0 0 0 1px var(--rc, var(--acc)); }
+  .card canvas { display: block; width: 100%; aspect-ratio: 2 / 1; opacity: 0; transition: opacity .35s; }
+  .card canvas[data-ready="1"] { opacity: 1; }
+  .card .nm { margin-top: 4px; font-size: 11px; letter-spacing: .2em; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card .fm { font-size: 9px; letter-spacing: .16em; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card .rb { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--rc); opacity: .85; }
+  .card .ck { position: absolute; right: 7px; top: 5px; font-size: 10px; color: #a6e3a1; }
+  .arm-detail { display: grid; grid-template-rows: minmax(220px, 1.35fr) auto; gap: 0; min-height: 0; border: 1px solid var(--line); }
+  .arm-view { position: relative; cursor: grab; min-height: 220px; }
+  .arm-view:active { cursor: grabbing; }
+  .arm-view .hint { position: absolute; right: 12px; bottom: 10px; color: #4a4d58; font-size: 10px; letter-spacing: .2em; pointer-events: none; }
+  .arm-info { background: rgba(10,11,16,.9); border-top: 1px solid var(--line); padding: 16px 20px 16px; }
+  .arm-name { font-size: 26px; letter-spacing: .34em; font-weight: 300; }
+  .arm-meta { margin-top: 6px; color: var(--dim); font-size: 11px; letter-spacing: .22em; }
+  .arm-tag { margin-top: 10px; color: #bac2de; font-size: 13px; letter-spacing: .06em; line-height: 1.5; }
+  .arm-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 26px; margin-top: 14px; }
+  .st { font-size: 10px; letter-spacing: .2em; color: var(--dim); }
+  .st .bar { height: 4px; background: rgba(255,255,255,.07); margin-top: 5px; position: relative; overflow: hidden; }
+  .st .bar i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--rc, var(--acc)); transition: width .3s ease; }
+  .st b { float: right; color: var(--fg); font-weight: 300; letter-spacing: .05em; }
+  .arm-traits { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+  .arm-traits span { font-size: 10px; letter-spacing: .16em; padding: 4px 9px; border: 1px solid #2f323c; color: #bac2de; }
+  .arm-kills { margin-top: 10px; font-size: 10px; letter-spacing: .2em; color: var(--dim); }
+  .arm-info .row { justify-content: flex-start; margin-top: 16px; }
+  .arm-info .btn { min-width: 0; }
+  @media (max-width: 900px) { .arm-body { grid-template-columns: 1fr; } .arm-grid { max-height: 34vh; } }
+
 </style>
 <script type="importmap">
 { "imports": { "three": "./vendor/three/three.module.js", "three/addons/": "./vendor/three/addons/" } }
@@ -147,12 +202,15 @@
   </div>
   <div class="br">
     <div id="weapon">PISTOLA</div>
+    <div id="weapon-sub"></div>
     <div id="ammo"><b>12</b> / ∞</div>
     <div class="rlwrap"><div id="reload"></div></div>
+    <div class="spwrap"><div id="spin"></div></div>
     <div id="slots"></div>
     <div id="flash">LINTERNA · F</div>
   </div>
   <div id="marker"><div class="dia"></div><div class="txt"></div></div>
+  <div id="prompt"></div>
   <div id="announce"></div>
   <div id="toast"></div>
 </div>
@@ -166,6 +224,7 @@
     <button class="btn primary" id="b-continue"></button>
     <button class="btn" id="b-campaign" data-t="menu.campaign">CAMPAÑA</button>
     <button class="btn" id="b-infinite" data-t="menu.infinite">INFINITO</button>
+    <button class="btn" id="b-armory" data-t="menu.armory">ARSENAL</button>
     <button class="btn" id="b-options" data-t="menu.options">OPCIONES</button>
     <button class="btn" id="b-fullscreen" data-t="menu.fullscreen">PANTALLA COMPLETA</button>
     <button class="btn hidden" id="b-install" data-t="menu.install">INSTALAR</button>
@@ -188,6 +247,32 @@
   <div class="sub" data-t="infinite.sub">oleadas sin fin en el lugar que elijas</div>
   <div class="list" id="map-list"></div>
   <div class="row"><button class="btn" id="b-infinite-back" data-t="campaign.back">VOLVER</button></div>
+</div>
+
+<div id="armory" class="screen">
+  <div class="arm-head">
+    <div><div class="title mid" data-t="armory.title">ARSENAL</div><div class="sub" id="arm-sub"></div></div>
+    <div class="arm-filters" id="arm-filters"></div>
+  </div>
+  <div class="arm-body">
+    <div class="arm-grid" id="arm-grid"></div>
+    <div class="arm-detail">
+      <div class="arm-view" id="arm-view"><div class="hint" data-t="armory.hint">arrastrá para girar · rueda para acercar</div></div>
+      <div class="arm-info">
+        <div class="arm-name" id="arm-name"></div>
+        <div class="arm-meta" id="arm-meta"></div>
+        <div class="arm-tag" id="arm-tag"></div>
+        <div class="arm-stats" id="arm-stats"></div>
+        <div class="arm-traits" id="arm-traits"></div>
+        <div class="arm-kills" id="arm-kills"></div>
+        <div class="row">
+          <button class="btn primary" id="b-arm-try" data-t="armory.try">PROBAR EN EL POLÍGONO</button>
+          <button class="btn small" id="b-arm-fire" data-t="armory.fire">DISPARAR</button>
+          <button class="btn small" id="b-arm-back" data-t="armory.back">VOLVER</button>
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <div id="options" class="screen">

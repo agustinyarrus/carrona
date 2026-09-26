@@ -1,11 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
-//  models.js — Modelos low poly armados con cajas y cilindros: armas, linterna,
-//  la base de las sillas. Nada de archivos: la silueta la dan 4 o 5 primitivas
-//  bien proporcionadas, que es exactamente el look que busca el juego.
-//
-//  Convención de las armas: +Z es hacia el caño, +Y arriba, origen en la
-//  empuñadura (donde va la mano derecha). Cada modelo devuelve también dónde
-//  está la boca del caño y la ventana de expulsión, en coordenadas locales.
+//  models.js — Modelos low poly armados con cajas y cilindros: linterna, cono
+//  de luz, la base de las sillas, las plantas. Nada de archivos: la silueta la
+//  dan 4 o 5 primitivas bien proporcionadas. (Las armas viven en gunsmith.js.)
 // ─────────────────────────────────────────────────────────────────────────────
 
 import * as THREE from 'three';
@@ -16,22 +12,8 @@ function mat(name, color, rough = 0.6, metal = 0.0, extra = {}) {
   if (!MATS[k]) MATS[k] = new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: metal, ...extra });
   return MATS[k];
 }
-const DARK = () => mat('dark', 0x22242a, 0.55, 0.45);
-const STEEL = () => mat('steel', 0xb6bcc4, 0.35, 0.7);
-const OLIVE = () => mat('olive', 0x6a6a3c, 0.7, 0.1);
-const WOOD = () => mat('wood', 0x6d452a, 0.7, 0.0);
-const PLASTIC = () => mat('plastic', 0x15161a, 0.7, 0.05);
 const RUBBER = () => mat('rubber', 0x2c2f36, 0.9, 0.0);
 
-/** Caja posicionada, con rotación opcional (pitch alrededor de X, en radianes). */
-function box(parent, m, w, h, d, x, y, z, pitch = 0, yaw = 0) {
-  const g = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
-  g.position.set(x, y, z);
-  g.rotation.set(pitch, yaw, 0);
-  g.castShadow = true;
-  parent.add(g);
-  return g;
-}
 /** Cilindro a lo largo de Z (un caño). */
 function tube(parent, m, r, len, x, y, z, seg = 8) {
   const g = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, seg), m);
@@ -40,60 +22,6 @@ function tube(parent, m, r, len, x, y, z, seg = 8) {
   g.castShadow = true;
   parent.add(g);
   return g;
-}
-
-export function weaponModel(kind) {
-  const grp = new THREE.Group();
-  let muzzle = new THREE.Vector3(0, 0.03, 0.2);
-  let eject = new THREE.Vector3(0.02, 0.04, 0.06);
-  switch (kind) {
-    case 'pistol': {
-      box(grp, STEEL(), 0.028, 0.030, 0.175, 0, 0.034, 0.075);      // corredera
-      box(grp, DARK(), 0.026, 0.020, 0.150, 0, 0.012, 0.070);       // armazón
-      box(grp, DARK(), 0.026, 0.075, 0.034, 0, -0.030, 0.005, 0.22); // empuñadura
-      box(grp, DARK(), 0.006, 0.016, 0.030, 0, -0.004, 0.045);      // guardamonte
-      tube(grp, DARK(), 0.006, 0.02, 0, 0.034, 0.17);               // boca
-      muzzle = new THREE.Vector3(0, 0.034, 0.17);
-      eject = new THREE.Vector3(0.02, 0.045, 0.06);
-      break;
-    }
-    case 'smg': {
-      box(grp, PLASTIC(), 0.045, 0.055, 0.30, 0, 0.032, 0.10);      // receptor
-      box(grp, PLASTIC(), 0.050, 0.048, 0.12, 0, 0.030, 0.23);      // guardamanos
-      tube(grp, DARK(), 0.010, 0.09, 0, 0.038, 0.335);              // caño
-      box(grp, DARK(), 0.026, 0.150, 0.040, 0, -0.055, 0.135, 0.30); // cargador
-      box(grp, PLASTIC(), 0.030, 0.080, 0.036, 0, -0.038, 0.005, 0.28); // empuñadura
-      box(grp, DARK(), 0.026, 0.030, 0.20, 0, 0.040, -0.14);        // culata
-      box(grp, DARK(), 0.034, 0.05, 0.02, 0, 0.030, -0.245);        // cantonera
-      muzzle = new THREE.Vector3(0, 0.038, 0.38);
-      eject = new THREE.Vector3(0.03, 0.05, 0.12);
-      break;
-    }
-    case 'shotgun': {
-      box(grp, DARK(), 0.044, 0.060, 0.22, 0, 0.030, 0.06);         // receptor
-      tube(grp, DARK(), 0.011, 0.50, 0, 0.042, 0.42);               // caño
-      tube(grp, DARK(), 0.011, 0.44, 0, 0.012, 0.40);               // tubo del cargador
-      box(grp, WOOD(), 0.046, 0.050, 0.13, 0, 0.014, 0.36);         // bomba
-      box(grp, WOOD(), 0.040, 0.068, 0.27, 0, 0.004, -0.18, -0.10); // culata
-      muzzle = new THREE.Vector3(0, 0.042, 0.68);
-      eject = new THREE.Vector3(0.03, 0.03, 0.08);
-      break;
-    }
-    case 'rifle': {
-      box(grp, OLIVE(), 0.040, 0.064, 0.30, 0, 0.032, 0.08);        // receptor
-      box(grp, WOOD(), 0.046, 0.050, 0.17, 0, 0.030, 0.31);         // guardamanos
-      tube(grp, DARK(), 0.009, 0.24, 0, 0.040, 0.50);               // caño
-      tube(grp, DARK(), 0.007, 0.16, 0, 0.062, 0.34);               // tubo de gases
-      box(grp, DARK(), 0.028, 0.090, 0.058, 0, -0.045, 0.135, 0.45); // cargador (curvo: 2 tramos)
-      box(grp, DARK(), 0.028, 0.080, 0.056, 0, -0.112, 0.175, 0.85);
-      box(grp, WOOD(), 0.030, 0.080, 0.040, 0, -0.038, -0.005, 0.28); // empuñadura
-      box(grp, WOOD(), 0.036, 0.052, 0.25, 0, 0.022, -0.20, -0.06);  // culata
-      muzzle = new THREE.Vector3(0, 0.040, 0.62);
-      eject = new THREE.Vector3(0.03, 0.05, 0.10);
-      break;
-    }
-  }
-  return { group: grp, muzzle, eject };
 }
 
 /** Linterna: cuerpo, cabeza y lente que brilla. Apunta a +Z. */

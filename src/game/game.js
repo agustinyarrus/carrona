@@ -9,26 +9,56 @@
 
 import * as THREE from 'three';
 import { PhysWorld } from '../phys/world.js';
-import { HEAD, CHEST, HIP, HAR } from '../phys/ragdoll.js';
+import { HEAD, CHEST, HIP, HAR, BONES } from '../phys/ragdoll.js';
 import { NavGrid } from './nav.js';
 import { LevelBuilder } from './level.js';
 import { getMap, MAPS, MAP_ORDER } from './maps.js';
 import { PropSystem } from './props.js';
 import { ZombieManager, ATTACKS } from './zombie.js';
 import { Player } from './player.js';
-import { WEAPONS, WEAPON_ORDER, fireHitscan } from './weapons.js';
-import { CAMPAIGN, missionById, infiniteMission, MissionManager, ITEM_STYLE } from './mission.js';
-import { loadProgress, saveProgress, recordAttempt, recordResult, recordInfinite, isMissionUnlocked, isInfiniteUnlocked, nextMission, missionsDone } from './progress.js';
+import { WEAPONS, WEAPON_ORDER } from './weapons.js';
+import { RARITY, SLOT_COUNT, rollWeapon, NEW_WEAPON_COUNT } from './catalog.js';
+import { Ballistics, AIM_CHEST, AIM_MIN_DIST } from './ballistics.js';
+import { StatusBoard } from './status.js';
+import { CAMPAIGN, missionById, infiniteMission, rangeMission, MissionManager, ITEM_STYLE } from './mission.js';
+import { loadProgress, saveProgress, recordAttempt, recordResult, recordInfinite, recordWeapon, weaponsFound, isMissionUnlocked, isInfiniteUnlocked, nextMission, missionsDone } from './progress.js';
 import { OPTIONS, optionByKey, defaultSettings, normalizeSettings, saveSettings, rebind, DEFAULT_KEYS } from './options.js';
 import { t, tx, setLang, getLang } from '../core/i18n.js';
 import { Materials } from '../render/materials.js';
 import { BodyRenderer, CorpseBuffer, paintBody, bloodyBone } from '../render/bodies.js';
 import { PropRenderer } from '../render/props_render.js';
 import { FX } from '../render/fx.js';
-import { weaponModel, flashlightModel, beamCone } from '../render/models.js';
-import { makeRng, clamp, clamp01, TAU } from '../core/util.js';
+import { flashlightModel, beamCone } from '../render/models.js';
+import { ShotFX } from '../render/shotfx.js';
+import { instantiateWeapon, animateWeapon, kickWeapon, weaponFinishSpecs } from '../render/gunsmith.js';
+import { makeStudioEnvironment, setWeaponEnvironment, finishProxyMeshes, bakeFinishes } from '../render/finishes.js';
+
+/** Texturas horneadas que se suben a la placa por cuadro del menú (cada juego: hasta 4 texturas de 256²). */
+const UPLOADS_PER_FRAME = 1;
+/** Fundido de la cortina de arranque, en segundos. */
+const CURTAIN_S = 0.8;
+/**
+ * Trabajo de precompilado por cuadro: detrás de la cortina de arranque no se ve nada (el menú
+ * del DOM sigue respondiendo) y en la compuerta la pantalla espera igual; en el menú a la vista,
+ * el de siempre (8 ms).
+ */
+const WARM_BUDGET_CURTAIN_MS = 48;
+const WARM_BUDGET_GATE_MS = 250;
+import { HUMS } from '../audio/audio.js';
+import { makeRng, rnd, clamp, clamp01, TAU } from '../core/util.js';
 
 const SKIN_PLAYER = [0.79, 0.45, 0.28];
+// cómo se sostiene cada tipo de arma: mano izquierda adelante (lo da el modelo), altura y lado
+const HOLD = Object.freeze({
+  pistol: { up: 0.0, side: 0.06, foreMax: 0.05 },
+  rifle: { up: 0.0, side: 0.0, foreMax: 0.3 },
+  heavy: { up: -0.16, side: 0.02, foreMax: 0.32 },
+  shoulder: { up: 0.06, side: 0.0, foreMax: 0.3 },
+});
+const SWAP_RADIUS = 1.05;       // a esta distancia de un arma en el piso aparece el cartel de cambiar
+const PICKUP_RADIUS = 0.85;
+const SELF_BLAST_FACTOR = 0.35; // lo que te hace tu propia explosión
+const FLESH_SOUNDS_PER_FRAME = 4;
 const _c = new THREE.Color();
 function lin(hex) { _c.setHex(hex); return [_c.r, _c.g, _c.b]; }
 
@@ -59,7 +89,7 @@ export class Game {
     this._aim = { x: 0, y: 1.0, z: 0 };
     this._dir = { x: 0, z: 0 };
     this._fwd = { x: 0, z: -1 }; this._rgt = { x: 1, z: 0 };
-    this._v = new THREE.Vector3(); this._v2 = new THREE.Vector3();
+    this._v = new THREE.Vector3(); this._v2 = new THREE.Vector3(); this._v3 = new THREE.Vector3();
     this._scr = { x: 0, y: 0, visible: false };
     this.settings = settings || defaultSettings();
     this.perf = { phys: 0, frame: 0, fps: 0, _acc: 0, _n: 0 };
@@ -69,14 +99,27 @@ export class Game {
     this.missionDef = null; this.mission = null;
     this._timers = [];
 
-    // modelos del jugador
-    this.weaponModels = {};
-    for (const k of WEAPON_ORDER) {
-      const m = weaponModel(k);
-      m.group.visible = false;
-      this.scene.add(m.group);
-      this.weaponModels[k] = m;
-    }
+    // armas: el modelo de cada una se arma la primera vez que hace falta (104 en el
+    // catálogo) y queda en caché; en la mano va UNA instancia que se cambia con el arma
+    setWeaponEnvironment(makeStudioEnvironment(renderer.renderer), 0.35);
+    this.heldInst = null;
+    this._held = new Map();
+    this.shotfx = new ShotFX(this.scene, { light: (x, y, z, c, k, d) => this.R.lightPulse(x, y, z, c, k, d), rng: rnd });
+    this.status = new StatusBoard(this.shotfx, rnd);
+    this.ballistics = new Ballistics({ world: this.world, sink: this._sink(), fx: this.shotfx, rng: this.rng });
+    this._tAlive = []; this._tAll = [];           // blancos de las áreas: se arman una vez por cuadro
+    this._fleshSounds = 0; this._shotHit = false;
+    this._swapTarget = null;
+    // shaders: la partida no arranca hasta tenerlos compilados (ver warmup.js y ensureWarm)
+    this.warm = { key: null, pending: null, stats: null };
+    this.gate = 'open';                 // 'closed' mientras la partida espera sus shaders
+    this._gateToken = 0;
+    this._samples = null;
+    this._prefetch = null;
+    // cortina de arranque: el menú se ve enseguida sobre negro y la escena entra con un fundido
+    // cuando los shaders están listos (las trabas de la placa al estrenarlos quedan detrás del negro)
+    this.curtain = { phase: 'closed', t: 0 };
+    renderer.setFade(1);
     this.flashModel = flashlightModel();
     this.scene.add(this.flashModel);
     this.beam = beamCone(8.5, 1.9);
@@ -143,6 +186,7 @@ export class Game {
     this.nav = new NavGrid(w, map.nav);
     this.zm = new ZombieManager(w, this.nav, this.rng);   // la horda captura la grilla: se recrea con ella
     this.R.applyMood(map.mood);
+    this.R.fixLightTopology();          // todos los mapas con la misma cantidad de luces: los mismos shaders
     this.map = map; this.mapId = map.id;
     this._spawnProps();
   }
@@ -164,6 +208,10 @@ export class Game {
     this.world.boxes = this.world.boxes.filter(b => !b.dead);
     this.world._staticDirty = true;
     this.fx.clear();
+    this.shotfx.clear();
+    this.ballistics.clear();
+    this.status.clear();
+    this.audio.humStop();
     this.world.compact();
   }
 
@@ -194,12 +242,16 @@ export class Game {
       Z.hp = 1e9;
     }
     this.R.cinematic = true;
-    this.R.setFade(0);
+    this.R.setFade(this.curtain.phase === 'open' ? 0 : 1);
     this.R.setDamage(0);
     this.beacon.visible = false;
     this._setWeaponVisible(null);
     this.audio.setIntensity(0);
     this.ui.showMenu(this.menuInfo());
+    // en segundo plano, mientras el menú se mira (detrás de la cortina, con más trabajo por cuadro)
+    const warm = this.ensureWarm(false, this.curtain.phase === 'closed' ? WARM_BUDGET_CURTAIN_MS : undefined);
+    if (this.curtain.phase === 'closed') warm.finally(() => { if (this.curtain.phase === 'closed') this.curtain.phase = 'opening'; });
+    this._prefetchWeapons();
   }
 
   /** Lo que muestra el menú principal. */
@@ -232,6 +284,83 @@ export class Game {
     });
   }
 
+  // ═══ shaders: nada se compila en medio de la partida ══════════════════════
+  /**
+   * Lo que todavía no está en la escena pero va a aparecer: un arma con cada
+   * estructura de material (texturas de 8×8) y el cartel de cada premio, con
+   * la columna de luz de las épicas. Se arma una vez. O(recetas).
+   */
+  _warmSamples() {
+    if (this._samples) return this._samples;
+    const out = [...finishProxyMeshes()];
+    const epic = WEAPON_ORDER.find(k => WEAPONS[k].rarity >= 3);
+    for (const kind of ['ammo', 'health', 'objective']) out.push(this._pickupMesh(kind, null, false));
+    out.push(this._pickupMesh('weapon', epic, false));
+    this._samples = out;
+    return out;
+  }
+
+  /**
+   * Precompila la escena con las muestras si la topología de shaders cambió
+   * (luces, sombras, niebla) o si se fuerza (un nivel recién armado puede
+   * traer materiales nuevos; con todo en caché la corrida tarda milisegundos).
+   * Devuelve la promesa de la corrida en curso. O(materiales).
+   */
+  ensureWarm(force = false, budgetMs = undefined) {
+    const key = this.R.shaderTopologyKey();
+    if (!force && this.warm.key === key && this.warm.pending) return this.warm.pending;
+    this.warm.key = key;
+    const job = this.R.warmScene(this._warmSamples(), { budgetMs }).then((st) => { this.warm.stats = st; return st; });
+    this.warm.pending = job;
+    return job;
+  }
+
+  /** Cierra la compuerta hasta que termine el precompilado: ni simulación ni dibujo con shaders a medio compilar. */
+  _closeGate(job) {
+    const token = ++this._gateToken;
+    this.gate = 'closed';
+    job.catch((e) => console.error('precompilado de shaders:', e))
+      .finally(() => { if (this._gateToken === token) this.gate = 'open'; });
+  }
+
+  /**
+   * Las texturas de las 104 armas, horneadas en un Worker mientras se mira el
+   * menú y subidas a la placa de a un juego por cuadro: cuando un zombi suelta
+   * un arma nueva, no se calcula ni se sube nada en pleno tiroteo. O(acabados).
+   */
+  _prefetchWeapons() {
+    if (this._prefetch) return;
+    const specs = [];
+    for (const k of WEAPON_ORDER) specs.push(...weaponFinishSpecs(WEAPONS[k]));
+    const P = this._prefetch = { phase: 'baking', specs: specs.length, baked: 0, cached: 0, uploads: [], uploaded: 0, bakeMs: 0 };
+    const t0 = performance.now();
+    bakeFinishes(specs).then((r) => {
+      P.baked = r.baked; P.cached = r.cached; P.bakeMs = performance.now() - t0;
+      P.uploads = r.sets; P.phase = 'uploading';
+    }).catch((e) => { P.phase = 'failed'; console.error('horno de texturas:', e); });
+  }
+
+  /** El fundido de la cortina de arranque (suave al principio y al final). */
+  _openCurtain(dt) {
+    const C = this.curtain;
+    if (C.phase !== 'opening') return;
+    C.t += dt;
+    const k = clamp01(C.t / CURTAIN_S);
+    this.R.setFade(1 - k * k * (3 - 2 * k));
+    if (k >= 1) C.phase = 'open';
+  }
+
+  /** Sube a la placa lo horneado, de a poco y sólo en el menú (un juego de texturas cuesta 2–6 ms). */
+  _uploadPrefetched() {
+    const P = this._prefetch;
+    if (!P || P.phase !== 'uploading') return;
+    for (let n = 0; n < UPLOADS_PER_FRAME && P.uploaded < P.uploads.length; n++) {
+      const T = P.uploads[P.uploaded++];
+      for (const tex of [T.map, T.normalMap, T.roughnessMap, T.emissiveMap]) if (tex) this.R.renderer.initTexture(tex);
+    }
+    if (P.uploaded >= P.uploads.length) { P.phase = 'done'; P.uploads = []; }
+  }
+
   // ═══ partidas ═════════════════════════════════════════════════════════════
   startMission(id) {
     const def = missionById(id);
@@ -242,6 +371,12 @@ export class Game {
   startInfinite(mapId) {
     if (!MAPS[mapId] || !isInfiniteUnlocked(this.progress, CAMPAIGN, mapId)) return false;
     this.newGame(infiniteMission(mapId));
+    return true;
+  }
+  /** El polígono: el arma elegida en la armería, en la oficina, con horda liviana. */
+  startRange(key) {
+    if (!WEAPONS[key]) return false;
+    this.newGame(rangeMission(key));
     return true;
   }
   /** Reintentar lo mismo (muerte, victoria, pausa). */
@@ -267,8 +402,9 @@ export class Game {
     const st = this.level.playerStart;
     // arsenal inicial de la misión
     const weapons = (def.start && def.start.weapons) || ['pistol'];
-    for (const k of weapons) if (k !== 'pistol') P.arsenal.give(k);
-    P.arsenal.switchTo(weapons[0]); P.arsenal.switchT = 0;
+    for (const k of weapons) { if (k !== 'pistol') P.arsenal.give(k); this._found(k); }
+    P.arsenal.switchTo(def.start && def.start.hold ? def.start.hold : weapons[0]); P.arsenal.switchT = 0;
+    this.killsBy = Object.create(null);
     this.stats = { kills: 0, headshots: 0, severs: 0, wave: 0, time: 0, shots: 0, hits: 0 };
     this.wcfg = def.waves || null;
     this.wave = 0; this.waveActive = false; this.waveLeft = 0; this.wavesCleared = 0;
@@ -284,16 +420,21 @@ export class Game {
     this.R.cinematic = false;
     this.R.camYawTarget = -0.42; this.R.camYaw = -0.42;
     this.R.camDist = this.R.camDistTarget;
+    this.curtain.phase = 'open';
     this.R.setFade(0);
     this.R.setDamage(0);
     this._setWeaponVisible(P.arsenal.current);
     this.ui.hideAll();
-    // progreso: cuenta el intento
-    if (!def.infinite) { recordAttempt(this.progress, def.id); this._saveProgress(); }
+    // progreso: cuenta el intento (el polígono no cuenta para nada)
+    if (def.practice) { /* práctica: sin récords */ }
+    else if (!def.infinite) { recordAttempt(this.progress, def.id); this._saveProgress(); }
     else { this.progress.last = def.id; this._saveProgress(); }
     // la misión
     this.mission = new MissionManager(def, this._missionHost());
-    if (def.infinite) this.ui.announce(t('ann.start'), getLang() === 'es' && this.map.texts ? this.map.texts.start : t('ann.startSub'));
+    // no se dibuja ni se simula hasta que los shaders de ESTA escena estén listos (ver warmup.js)
+    this._closeGate(this.ensureWarm(true, WARM_BUDGET_GATE_MS));
+    if (def.practice) this.ui.announce(t('ann.range'), this.weaponLabel(WEAPONS[def.start.hold]));
+    else if (def.infinite) this.ui.announce(t('ann.start'), getLang() === 'es' && this.map.texts ? this.map.texts.start : t('ann.startSub'));
     else this.ui.announce(tx(def.name), tx(def.brief));
     this.mission.start();
     this.audio.setIntensity(0.15);
@@ -346,10 +487,12 @@ export class Game {
     for (const p of this.pickups) this.pickupGroup.remove(p.mesh);
     this.pickups.length = 0;
   }
-  _pickupMesh(kind, weapon) {
+  /** El premio en el piso. Con withModel=false arma sólo el cartel (las muestras del precompilado). */
+  _pickupMesh(kind, weapon, withModel = true) {
     const g = new THREE.Group();
     const colors = { ammo: 0x6d7a3a, health: 0xe8e2d2, weapon: 0x2a2c33, objective: 0x3a3630 };
-    const glowC = { ammo: 0xffd24a, health: 0xff3b4a, weapon: 0x5aa0ff, objective: (ITEM_STYLE[weapon] || {}).color || 0xffd24a };
+    const rar = kind === 'weapon' && WEAPONS[weapon] ? RARITY[WEAPONS[weapon].rarity] : null;
+    const glowC = { ammo: 0xffd24a, health: 0xff3b4a, weapon: rar ? new THREE.Color(rar.color).getHex() : 0x5aa0ff, objective: (ITEM_STYLE[weapon] || {}).color || 0xffd24a };
     const base = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.28, 0.32), new THREE.MeshStandardMaterial({ color: colors[kind], roughness: 0.8 }));
     base.castShadow = true; base.position.y = 0.14;
     g.add(base);
@@ -357,9 +500,19 @@ export class Game {
     stripe.position.y = 0.14;
     g.add(stripe);
     if (kind === 'weapon') {
-      const m = weaponModel(weapon).group;
-      m.position.set(0, 0.42, 0); m.rotation.set(0, Math.PI / 2, -0.15); m.scale.setScalar(1.4);
-      g.add(m);
+      // el modelo del catálogo (se arma acá, entre oleadas: cuando lo agarrás ya existe)
+      if (withModel) {
+        const inst = instantiateWeapon(WEAPONS[weapon]);
+        const m = inst.group, len = inst.proto.length;
+        m.position.set(0, 0.42, 0); m.rotation.set(0, Math.PI / 2, -0.15); m.scale.setScalar(clamp(0.95 / Math.max(0.2, len), 1.0, 1.6));
+        g.add(m);
+      }
+      if (WEAPONS[weapon].rarity >= 3) {
+        // épicas y legendarias: una columna de luz que se ve de lejos
+        const col = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.1, 2.2, 6, 1, true),
+          new THREE.MeshBasicMaterial({ color: new THREE.Color(glowC.weapon).multiplyScalar(1.5), toneMapped: false, transparent: true, opacity: 0.3, depthWrite: false, side: THREE.DoubleSide }));
+        col.position.y = 1.3; g.add(col);
+      }
     }
     if (kind === 'health') {
       const cross1 = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.06, 0.06), new THREE.MeshBasicMaterial({ color: new THREE.Color(0xff3b4a).multiplyScalar(2), toneMapped: false }));
@@ -375,11 +528,13 @@ export class Game {
     // sin luz puntual: cada luz cuesta en todos los píxeles; alcanza con el brillo
     return g;
   }
-  spawnPickup(kind, weapon, x, z) {
+  /** Algo en el piso. `ammo` ({mag, reserve}) viaja con un arma soltada: nadie gana ni pierde balas. */
+  spawnPickup(kind, weapon, x, z, ammo = null) {
     const mesh = this._pickupMesh(kind, weapon);
     mesh.position.set(x, 0.01, z);
     this.pickupGroup.add(mesh);
-    this.pickups.push({ kind, weapon, x, z, mesh, t: this.rng() * 6, life: kind === 'objective' ? Infinity : 90 });
+    // nada que compilar: las 104 armas comparten el programa que ya precompiló el menú (ver warmup.js)
+    this.pickups.push({ kind, weapon, x, z, mesh, ammo, t: this.rng() * 6, life: kind === 'objective' ? Infinity : kind === 'weapon' ? 120 : 90 });
   }
   _dropRewards() {
     const P = this.player;
@@ -388,7 +543,11 @@ export class Game {
     const spot = () => this.nav.randomReachable(R, P.x, P.z, 3, 7) || { x: P.x + 2, z: P.z };
     const nextWave = this.wave + 1;
     if (unlock[nextWave] && !P.arsenal.has(unlock[nextWave])) { const s = spot(); this.spawnPickup('weapon', unlock[nextWave], s.x, s.z); }
-    else if (nextWave > 5 && R() < 0.35) { const s = spot(); this.spawnPickup('weapon', WEAPON_ORDER[1 + R.int(0, 2)], s.x, s.z); }
+    // y una del arsenal nuevo, sorteada por rareza (las raras se abren con las oleadas)
+    const owned = new Set(P.arsenal.owned());
+    const k1 = rollWeapon(R, this.wave, { exclude: owned });
+    if (k1) { const s = spot(); this.spawnPickup('weapon', k1, s.x, s.z); owned.add(k1); }
+    if (this.wave >= 3 && R() < 0.3 + this.wave * 0.03) { const k2 = rollWeapon(R, this.wave + 2, { exclude: owned, minRarity: 1 }); if (k2) { const s = spot(); this.spawnPickup('weapon', k2, s.x, s.z); } }
     const s1 = spot(); this.spawnPickup('ammo', null, s1.x, s1.z);
     if (P.hp < 70 || R() < 0.35) { const s2 = spot(); this.spawnPickup('health', null, s2.x, s2.z); }
   }
@@ -406,8 +565,10 @@ export class Game {
         if (p.kind === 'ammo') { P.arsenal.ammoAll(1); this.ui.toast(t('toast.ammo')); }
         else if (p.kind === 'health') { P.hp = Math.min(P.maxHp, P.hp + 50); this.ui.toast(t('toast.health')); }
         else if (p.kind === 'weapon') {
-          const fresh = P.arsenal.give(p.weapon);
-          this.ui.toast(fresh ? t('weapon.' + p.weapon) : t('toast.weaponAmmo', { weapon: t('weapon.' + p.weapon) }));
+          // sólo se levanta sola si no hay que soltar nada; si no, cartel y tecla (ver _updateSwap)
+          if (!P.arsenal.canTake(p.weapon)) continue;
+          const fresh = P.arsenal.give(p.weapon, p.ammo);
+          this._announceWeapon(p.weapon, fresh);
           if (fresh) this._setWeaponVisible(p.weapon);
         } else if (p.kind === 'objective') {
           if (this.mission) this.mission.onPickup(p);
@@ -503,93 +664,322 @@ export class Game {
   }
 
   // ═══ disparo ══════════════════════════════════════════════════════════════
+  /** Nombre visible de un arma (las clásicas tienen el suyo, traducido). */
+  weaponLabel(def) { return def.classic ? t('weapon.' + def.key) : def.name; }
+
+  /** El arma en la mano: una instancia por arma (se arma la primera vez) enganchada a la escena. */
   _setWeaponVisible(kind) {
-    for (const k in this.weaponModels) this.weaponModels[k].group.visible = (k === kind);
+    if (this.heldInst) { this.scene.remove(this.heldInst.group); this.heldInst = null; }
     this.flashModel.visible = !!kind;
-    this.beam.visible = !!kind && this.player?.flashlight;
+    this.beam.visible = !!kind && !!this.player?.flashlight;
+    if (!kind || !WEAPONS[kind]) return;
+    let inst = this._held.get(kind);
+    if (!inst) { inst = instantiateWeapon(WEAPONS[kind]); this._held.set(kind, inst); }
+    this.scene.add(inst.group);
+    this.heldInst = inst;
+    // cómo lo sostiene: la mano izquierda va donde el modelo tiene el guardamanos
+    const def = WEAPONS[kind], H = HOLD[def.hold] || HOLD.rifle, B = this.player && this.player.body;
+    if (B) { B.aimFore = clamp(inst.proto.fore, 0, H.foreMax); B.aimUp = H.up; B.aimSide = H.side; }
   }
 
-  _muzzleWorld(out) {
-    const wm = this.weaponModels[this.player.arsenal.current];
-    out.copy(wm.muzzle).applyMatrix4(wm.group.matrixWorld);
-    return out;
+  /** Boca del caño en el mundo (las de varios caños alternan). */
+  _muzzleWorld(out, idx = 0) {
+    const inst = this.heldInst;
+    if (!inst) return out.set(this.player.x, 1.2, this.player.z);
+    return out.copy(inst.muzzles[idx % inst.muzzles.length]).applyMatrix4(inst.group.matrixWorld);
   }
 
   fire(def) {
-    const P = this.player, B = P.body, w = this.world;
-    const m = this._muzzleWorld(this._v);
+    const P = this.player, B = P.body, w = this.world, inst = this.heldInst;
+    if (inst) inst.group.updateMatrixWorld(true);
+    const m = this._muzzleWorld(this._v, inst ? inst.muzzleIdx++ : 0);
     const dir = P.aimDir(this._dir);
     // El rayo nace en el PECHO del jugador (no en la boca del caño): un zombi
     // pegado al cuerpo queda más cerca que el caño y si no, no le pegás nunca.
     // El fogonazo y la trazadora sí salen del caño.
     const ox = B.px(CHEST) + dir.x * 0.15, oy = B.py(CHEST) + 0.02, oz = B.pz(CHEST) + dir.z * 0.15;
     const ad = Math.hypot(P.aim.x - ox, P.aim.z - oz);
-    let dy = (1.05 - oy) / Math.max(4, ad);
+    let dy = (AIM_CHEST - oy) / Math.max(AIM_MIN_DIST, ad);
     let dx = dir.x, dz = dir.z;
     const l = Math.hypot(dx, dy, dz); dx /= l; dy /= l; dz /= l;
-    const n = fireHitscan(w, ox, oy, oz, dx, dy, dz, def, B, this.rng, this.hits);
-    P.shots++;
-    this.stats.shots++;
-    let hitSomething = false;
-    for (let i = 0; i < n; i++) {
-      const H = this.hits[i];
-      // trazadora: desde el caño (el primer tramo) o desde donde siguió (fusil)
-      const fromMuzzle = H.pierced === 0;
-      this.fx.tracerLine(fromMuzzle ? m.x : H.ox, fromMuzzle ? m.y : H.oy, fromMuzzle ? m.z : H.oz,
-        H.x, H.y, H.z, def.key === 'shotgun' ? 0.01 : 0.016, 1, 0.9, 0.62);
-      if (H.kind === 'body') {
-        const body = H.body;
-        const b = w.bmeta[H.bone];
-        const imp = def.impulse * (H.pierced ? 0.6 : 1);
-        const res = body.hit(b, H.s, H.dmg, [H.dirx * imp, 0.25 * imp + 0.6, H.dirz * imp]);
-        hitSomething = true;
-        bloodyBone(body, b, 0.35 + H.dmg * 0.006);
-        this.fx.bloodSpray(H.x, H.y, H.z, H.dirx, H.diry, H.dirz, 0.6 + H.dmg / 40);
-        this.audio.fleshHit(H.x, H.z, res.zone === 0);
-        const Z = body.zombie;
-        if (res.severed) {
-          this.fx.goreBurst(H.x, H.y, H.z, 1);
-          this.audio.gore(H.x, H.z);
-          P.severs++; this.stats.severs++;
-        }
-        if (Z && !body.dead) {
-          Z.hp -= res.damage;
-          if (!Z.alert) { Z.wakeUp(); Z.reactT = 0.08; }   // un tiro despierta ya
-          if (Z.hp <= 0) {
-            body.kill(res.zone === 0 || def.key === 'shotgun');
-            // un tiro en la cabeza al morir la vuela un poco
-            if (res.zone === 0) { P.headshots++; this.stats.headshots++; this.fx.bloodSpray(H.x, H.y, H.z, H.dirx, 0.4, H.dirz, 1.4); }
-          }
-        }
-      } else if (H.kind === 'static') {
-        if (H.obj && H.obj.isCorpse) {
-          // un cadáver: sangre, no polvo
-          this.fx.bloodSpray(H.x, H.y + 0.05, H.z, H.dirx, 0.5, H.dirz, 0.5);
-          this.audio.fleshHit(H.x, H.z, false);
-        } else {
-          this.fx.impact(H.x, H.y, H.z, H.nx, H.ny, H.nz);
-          this.audio.wallHit(H.x, H.z);
-          this.props.wakeNear(H.x, H.z, 0.25, H.dirx * def.impulse * 3, def.impulse, H.dirz * def.impulse * 3);
-        }
-      }
+    let ej = null, rear = null;
+    if (inst) {
+      ej = this._v2.copy(inst.eject).applyMatrix4(inst.group.matrixWorld);
+      if (inst.proto.backblast) rear = this._v3.copy(inst.rear).applyMatrix4(inst.group.matrixWorld);
     }
-    if (hitSomething) { P.hitsLanded++; this.stats.hits++; }
-    // fogonazo, casquillo, retroceso
-    this.fx.muzzle(ox, oy, oz, dx, dy, dz, def.key === 'shotgun' ? 1.6 : 1);
-    this.R.muzzleFlash(ox, oy, oz, def.key === 'shotgun' ? 1.5 : 1);
-    const wm = this.weaponModels[def.key];
-    const ej = this._v2.copy(wm.eject).applyMatrix4(wm.group.matrixWorld);
-    this.fx.shell(ej.x, ej.y, ej.z, -dz * 0.6 + dx * 0.4, dx * 0.6 + dz * 0.4, def.key === 'shotgun' ? 1.6 : 1);
+    P.shots++; this.stats.shots++;
+    this._shotHit = false;
+    this.ballistics.fire(def, { shooter: B, mx: m.x, my: m.y, mz: m.z, ox, oy, oz, dx, dy, dz, aimX: this._aim.x, aimZ: this._aim.z, rear });
+    if (this._shotHit) { P.hitsLanded++; this.stats.hits++; }
+    // casquillo, cámara, retroceso en el cuerpo y en las manos, animación del arma
+    const cas = def.shot.casing;
+    if (ej && cas && cas !== 'none') this.fx.shell(ej.x, ej.y, ej.z, -dz * 0.6 + dx * 0.4, dx * 0.6 + dz * 0.4, 1, cas);
     this.R.addShake(def.shake * this.settings.shake);
     this.R.addKick(-dx * def.kick * 0.25, 0, -dz * def.kick * 0.25);
     this.R.fovPunch = Math.max(this.R.fovPunch, def.kick * 1.5);
-    // retroceso en el cuerpo y en la pose de las manos
     w.addImpulse(B.p[HAR], -dx * 6 * def.kick, 2 * def.kick, -dz * 6 * def.kick);
     w.addImpulse(B.p[CHEST], -dx * 8 * def.kick, 0, -dz * 8 * def.kick);
+    if (inst) kickWeapon(inst);
     P.onFired(def);
-    this.audio.shot(def.key);
-    this.zm.alertAll(P.x, P.z, 16);
+    this.audio.shot(def);
   }
+
+  /** Mira láser: un hilo de luz de la boca hasta lo primero que toca, y el punto. */
+  _laserSight(m, color) {
+    const P = this.player, d = P.aimDir(this._dir), w = this.world;
+    let L = 30;
+    if (w.raycastBones(m.x, m.y, m.z, d.x, 0, d.z, L, this._lb || (this._lb = {}), P.body)) L = this._lb.t;
+    const tS = w.raycastStatic(m.x, m.y, m.z, d.x, 0, d.z, L, this._ls || (this._ls = {}));
+    if (tS >= 0) L = tS;
+    const ex = m.x + d.x * L, ez = m.z + d.z * L;
+    this.shotfx.segment(m.x, m.y, m.z, ex, m.y, ez, 0.005, color, 1.1, 0.03, 8, 0);
+    this.shotfx.billboard(ex, m.y, ez, 0.07, color, 2.6, 0.03, 0, 0);
+  }
+
+  // ═══ el sumidero de la balística: lo que un tiro le hace al juego ═════════
+  _sink() {
+    return {
+      hitBody: (body, bone, s, dmg, imp, def, info) => this._hitBody(body, bone, s, dmg, imp, def, info),
+      hitStatic: (H, def, info) => this._hitStatic(H, def, info),
+      targets: (includeDead) => (includeDead ? this._tAll : this._tAlive),
+      applyStatus: (body, kind, amount, def) => { const Z = body.zombie; if (Z && !Z.dead) this.status.apply(Z, kind, amount, def); },
+      selfBlast: (x, y, z, r, dmg, force, def) => this._selfBlast(x, y, z, r, dmg, force, def),
+      onExplosion: (x, y, z, r, def, kind) => this._onExplosion(x, y, z, r, def, kind),
+      alert: (x, z, r) => this.zm.alertAll(x, z, r),
+    };
+  }
+
+  /** Los blancos de las áreas (explosión, relámpago, chorro): los zombis en el mundo. O(horda), una vez por cuadro. */
+  _buildTargets() {
+    const A = this._tAlive, L = this._tAll;
+    A.length = 0; L.length = 0;
+    if (!this.zm) return;
+    for (const Z of this.zm.zombies) {
+      const B = Z.body;
+      if (!B.alive) continue;
+      L.push(B);
+      if (!B.dead) A.push(B);
+    }
+  }
+
+  /**
+   * Un impacto en un cuerpo: multiplicadores (cabeza, miembros, congelado,
+   * ácido), la reacción física del ragdoll, sangre, sonido, mutilaciones,
+   * vida del zombi, los estados que deja el arma y la baja atribuida.
+   */
+  _hitBody(body, bone, s, dmg, imp, def, info) {
+    const fx = def.shot.fx || {};
+    const zone = BONES[bone] ? BONES[bone][4] : 1;
+    const Z = body.zombie;
+    let mult = 1;
+    if (Z) mult *= this.status.vulnerability(Z);
+    if (fx.hs && zone === 0) mult *= fx.hs;
+    if (fx.sever && zone >= 2) mult *= fx.sever;
+    const res = body.hit(bone, s, dmg * mult, imp);
+    if (body.player) {
+      // tu propio disco que rebota o tu arpón también duelen (menos)
+      if (info.kind === 'proj' && this.player && this.player.alive) { if (this.player.damage(dmg * 0.35, info.x - info.dirx, info.z - info.dirz)) this._playerDied(); }
+      return res;
+    }
+    const soft = info.kind === 'spray' || info.kind === 'wave';
+    if (!soft) {
+      bloodyBone(body, bone, 0.35 + res.damage * 0.006);
+      if (info.kind !== 'arc') this.fx.bloodSpray(info.x, info.y, info.z, info.dirx, info.diry, info.dirz, info.kind === 'blast' ? 1.2 : 0.6 + Math.min(2, dmg / 40));
+      if (this._fleshSounds++ < FLESH_SOUNDS_PER_FRAME) this.audio.fleshHit(info.x, info.z, res.zone === 0);
+    }
+    if (res.severed) {
+      this.fx.goreBurst(info.x, info.y, info.z, 1);
+      this.audio.gore(info.x, info.z);
+      this.player.severs++; this.stats.severs++;
+    }
+    if (info.kind !== 'blast' && !info.limb) this._shotHit = true;
+    if (info.kind === 'arc') this.audio.zap(info.x, info.z);
+    if (Z && !body.dead) {
+      Z.hp -= res.damage;
+      if (!Z.alert) { Z.wakeUp(); Z.reactT = 0.08; }       // un tiro despierta ya
+      // lo que deja el arma además del daño (el chorro y el relámpago ya lo aplicaron)
+      if (!soft && info.kind !== 'arc' && info.kind !== 'blast') {
+        if (fx.burn) this.status.apply(Z, 'burn', fx.burn, def);
+        if (fx.freeze) this.status.apply(Z, 'freeze', fx.freeze, def);
+        if (fx.acid) this.status.apply(Z, 'acid', fx.acid, def);
+        if (fx.shock && this.rng() < fx.shock) {
+          this.status.apply(Z, 'shock', 0.6, def);
+          // el choque salta al zombi de al lado (una sola vez)
+          const n = this._nearestTarget(body, 2.6);
+          if (n) { this.shotfx.arc(info.x, info.y, info.z, n.px(CHEST), n.py(CHEST), n.pz(CHEST), def.shot.tracer || '#cba6f7', 0.012, 0.1); this.status.apply(n.zombie, 'shock', 0.5, def); }
+        }
+      }
+      if (Z.hp <= 0) {
+        const frozen = this.status.isFrozen(Z);
+        body.kill(res.zone === 0 || def.pellets > 1 || info.kind === 'blast' || dmg >= 90 || frozen);
+        this._credit(Z, def);
+        if (res.zone === 0) { this.player.headshots++; this.stats.headshots++; this.fx.bloodSpray(info.x, info.y, info.z, info.dirx, 0.4, info.dirz, 1.4); }
+        if (frozen) this._shatter(body);
+      }
+    }
+    return res;
+  }
+
+  _nearestTarget(from, r) {
+    let best = null, bd = r;
+    const x = from.px(CHEST), z = from.pz(CHEST);
+    for (const B of this._tAlive) {
+      if (B === from || !B.zombie) continue;
+      const d = Math.hypot(B.px(CHEST) - x, B.pz(CHEST) - z);
+      if (d < bd) { bd = d; best = B; }
+    }
+    return best;
+  }
+
+  _hitStatic(H, def, info) {
+    const obj = H.box || H.obj || null;
+    if (obj && obj.isCorpse) {
+      // un cadáver: sangre, no polvo
+      this.fx.bloodSpray(H.x, H.y + 0.05, H.z, info.dirx, 0.5, info.dirz, 0.5);
+      this.audio.fleshHit(H.x, H.z, false);
+      return;
+    }
+    const k = def.shot.kind;
+    if (info.kind === 'bounce' || info.kind === 'stick') { this.audio.thunk(H.x, H.z, info.kind === 'bounce' || (def.shot.proj && def.shot.proj.look === 'nail')); return; }
+    if (k === 'beam' || k === 'rail') this.fx.scorch(H.x, H.y, H.z, k === 'rail' ? 0.22 : 0.1, H.nx, H.ny, H.nz);
+    else this.fx.impact(H.x, H.y, H.z, H.nx, H.ny, H.nz);
+    if (k === 'bullet') this.shotfx.sparks(H.x, H.y, H.z, H.nx, H.ny, H.nz, def.pellets > 1 ? 2 : 5, '#ffcf8a', 0.8);
+    this.audio.wallHit(H.x, H.z);
+    const imp = def.impulse || 6;
+    this.props.wakeNear(H.x, H.z, 0.25, info.dirx * imp * 3, imp, info.dirz * imp * 3);
+  }
+
+  /** Tu propia explosión: si estás en el radio y a la vista, te empuja y te lastima (un tercio). */
+  _selfBlast(x, y, z, r, dmg, force, def) {
+    const P = this.player;
+    if (!P || !P.alive) return;
+    const cy = P.body.py(CHEST), d = Math.hypot(P.x - x, cy - y, P.z - z);
+    if (d > r || !this.world.lineOfSight(x, y + 0.2, z, P.x, cy, P.z)) return;
+    const f = 1 - (d / r) ** 2;
+    const died = P.damage(dmg * SELF_BLAST_FACTOR * f, x, z);
+    if (died) { this._playerDied(); return; }
+    if (f > 0.4) P.body.knockback((P.x - x) / (d || 1), (P.z - z) / (d || 1), 0.8 + f, 0.5);
+  }
+
+  _onExplosion(x, y, z, r, def, kind) {
+    const P = this.player;
+    const d = P ? Math.hypot(P.x - x, P.z - z) : 10;
+    this.R.addShake(Math.min(1.1, (r / 3) * 0.9 * clamp01(1.4 - d / (r * 5))) * this.settings.shake);
+    if (kind !== 'acid') this.fx.scorch(x, 0.001, z, r * 0.45, 0, 1, 0);
+    this.audio.explosion(x, z, r / 3);
+    this.props.wakeNear(x, z, r, 0, r * 6, 0);
+    this.zm.alertAll(x, z, 22);
+  }
+
+  /** Daño por tiempo (fuego, ácido): sin reacción física, sólo la vida; la baja es del arma que lo prendió. */
+  _statusDamage(Z, dmg, def, kind) {
+    if (Z.dead || Z.body.dead) return;
+    Z.hp -= dmg * this.status.vulnerability(Z);
+    if (kind === 'burn' && this.rng() < 0.08) this.audio.fleshHit(Z.x, Z.z, false);
+    if (Z.hp <= 0) { Z.body.kill(false); if (def) this._credit(Z, def); }
+  }
+
+  /** Congelado y muerto: se parte en esquirlas de hielo. */
+  _shatter(body) {
+    const x = body.px(CHEST), y = body.py(CHEST), z = body.pz(CHEST);
+    for (let i = 0; i < 26; i++) {
+      const a = this.rng() * TAU, sp = 2 + this.rng() * 6;
+      this.shotfx.spark(x, y, z, Math.cos(a) * sp, 1 + this.rng() * 4, Math.sin(a) * sp, 0.02, '#dff4ff', 2.4, 0.5 + this.rng() * 0.4, 0.02, 14, 1);
+    }
+    this.shotfx.billboard(x, y, z, 0.8, '#bfe8ff', 2.2, 0.2, 14, 1, this.rng() * TAU);
+  }
+
+  /** La baja se anota al arma (colección, estadística) y, si el arma cura, cura. */
+  _credit(Z, def) {
+    if (!def || Z.creditedTo) return;
+    Z.creditedTo = def.key;
+    if (this.killsBy) this.killsBy[def.key] = (this.killsBy[def.key] || 0) + 1;
+    recordWeapon(this.progress, def.key, { kills: 1 });
+    const ls = def.shot.fx && def.shot.fx.lifesteal;
+    if (ls && this.player && this.player.alive) this.player.hp = Math.min(this.player.maxHp, this.player.hp + ls);
+  }
+
+  /** Premio al morir: el bruto suelta un arma seguido; el resto, muy de vez en cuando. */
+  _deathDrop(Z) {
+    if (this.state !== 'playing' || !this.missionDef || this.missionDef.practice) return;
+    const brute = Z.type === 'brute';
+    if (this.rng() > (brute ? 0.4 : 0.018)) return;
+    const k = rollWeapon(this.rng, this.wave + (brute ? 2 : 0), { exclude: new Set(this.player.arsenal.owned()), minRarity: brute ? 1 : 0, maxRarity: brute ? 4 : 2 });
+    if (k) this.spawnPickup('weapon', k, Z.x, Z.z);
+  }
+
+  /** Un arma nueva (o munición): cartel con el color de la rareza y a la colección. */
+  _announceWeapon(key, fresh) {
+    const d = WEAPONS[key], R = RARITY[d.rarity];
+    this._found(key);
+    if (fresh) this.ui.toast(this.weaponLabel(d) + ' · ' + tx(R.name).toUpperCase(), R.color);
+    else this.ui.toast(t('toast.weaponAmmo', { weapon: this.weaponLabel(d) }));
+  }
+  _found(key) {
+    if (!WEAPONS[key]) return;
+    if (recordWeapon(this.progress, key, { found: true })) this._saveProgress();
+  }
+
+  /** El arma del piso más cercana que NO se levanta sola (hay que soltar otra): cartel y tecla. */
+  _updateSwap() {
+    const P = this.player;
+    this._swapTarget = null;
+    if (!P || !P.alive) { this.ui.prompt(null); return; }
+    let best = null, bd = SWAP_RADIUS;
+    for (const p of this.pickups) {
+      if (p.kind !== 'weapon' || P.arsenal.canTake(p.weapon)) continue;
+      const d = Math.hypot(p.x - P.x, p.z - P.z);
+      if (d < bd) { bd = d; best = p; }
+    }
+    if (!best) { this.ui.prompt(null); return; }
+    this._swapTarget = best;
+    const d = WEAPONS[best.weapon], R = RARITY[d.rarity];
+    const out = P.arsenal.inSlot(d.slot - 1);
+    const s = this.R.worldToScreen(best.x, 0.95, best.z, this._scr);
+    this.ui.prompt({ key: this.settings.keys.swap[0] || '', name: this.weaponLabel(d), color: R.color, rarity: tx(R.name), out: out ? this.weaponLabel(WEAPONS[out]) : '' }, s.x, s.y);
+  }
+
+  /** Cambio: el arma del piso a la mano; la de esa ranura, al piso con sus balas. */
+  _swapPickup(p) {
+    const P = this.player, A = P.arsenal;
+    const i = this.pickups.indexOf(p);
+    if (i < 0) return;
+    this.pickupGroup.remove(p.mesh); this.pickups.splice(i, 1);
+    const fresh = A.give(p.weapon, p.ammo);
+    const drop = A.dropped;
+    if (drop) {
+      const a = P.body.yaw + Math.PI * (0.6 + this.rng() * 0.8);
+      this.spawnPickup('weapon', drop.def.key, P.x + Math.sin(a) * 0.9, P.z + Math.cos(a) * 0.9, drop.ammo);
+      A.dropped = null;
+    }
+    this._announceWeapon(p.weapon, fresh);
+    this._setWeaponVisible(A.current);
+    this.audio.pickup('weapon');
+    this.audio.humStop();
+    this.fx.sparks(p.x, 0.3, p.z, 0, 1, 0, 14, 1, 0.9, 0.5);
+    this._swapTarget = null;
+    this.ui.prompt(null);
+  }
+
+  /** Zumbidos continuos del arma en la mano: giro de la rotativa, carga del riel, siseo del chorro. */
+  _weaponHums(firing) {
+    const A = this.player.arsenal, d = A.def, W = A.weapon;
+    if (d.windup) this.audio.hum(d.auto ? 'spin' : 'charge', W.spin, d.auto ? HUMS.spin : HUMS.charge);
+    if (d.shot.kind === 'spray') {
+      const on = firing && W.mag >= 1 && W.reloading <= 0 ? 1 : 0;
+      const cryo = d.shot.spray.type === 'cryo';
+      this.audio.hum(cryo ? 'cryo' : 'flame', on, cryo ? HUMS.cryo : HUMS.flame);
+    }
+  }
+
+  /** Lo que muestra la armería: las 104 con su estado en la colección. */
+  armoryEntries() {
+    return WEAPON_ORDER.map(k => {
+      const d = WEAPONS[k], rec = this.progress.weapons ? this.progress.weapons[k] : null;
+      return { key: k, def: d, name: this.weaponLabel(d), found: !!(rec && rec.found), kills: rec ? rec.kills || 0 : 0 };
+    });
+  }
+  armoryCounts() { return { found: weaponsFound(this.progress), total: WEAPON_ORDER.length, fresh: NEW_WEAPON_COUNT }; }
 
   _shove() {
     const P = this.player;
@@ -632,6 +1022,7 @@ export class Game {
       },
       onDeath: (Z) => {
         this.player.kills++; this.stats.kills++;
+        this._deathDrop(Z);
       },
       onCorpse: (Z) => { this._freezeCorpse(Z.body); },
       onMoan: (Z, dist) => { this.audio.groan(Z.x, Z.z, 0.9 + this.rng() * 0.3, Z.type); },
@@ -679,13 +1070,17 @@ export class Game {
 
   // ═══ fin de partida ═══════════════════════════════════════════════════════
   _playerDied() {
+    if (this.state === 'dead') return;          // dos golpes en el mismo cuadro (tu explosión y un zombi)
     this.state = 'dead';
     this._timers.length = 0;
     this.audio.death();
     this.audio.setIntensity(0);
-    this.best.wave = Math.max(this.best.wave, this.stats.wave);
-    this.best.kills = Math.max(this.best.kills, this.stats.kills);
-    this._saveBest();
+    this.audio.humStop();
+    if (!(this.missionDef && this.missionDef.practice)) {
+      this.best.wave = Math.max(this.best.wave, this.stats.wave);
+      this.best.kills = Math.max(this.best.kills, this.stats.kills);
+      this._saveBest();
+    }
     this._recordEnd(false);
     this._setWeaponVisible(null);
     this.beacon.visible = false;
@@ -717,6 +1112,7 @@ export class Game {
   _recordEnd(won) {
     const def = this.missionDef;
     if (!def) return { firstTime: false, newBest: false };
+    if (def.practice) { this._saveProgress(); return { firstTime: false, newBest: false }; }   // el polígono: sólo guarda la colección
     let res = { firstTime: false, newBest: false };
     if (def.infinite) recordInfinite(this.progress, def.mapId, { wave: this.stats.wave, kills: this.stats.kills });
     else res = recordResult(this.progress, def.id, { won, time: this.stats.time, kills: this.stats.kills });
@@ -728,6 +1124,7 @@ export class Game {
   pause() {
     if (this.state !== 'playing') return;
     this.state = 'paused';
+    this.audio.humStop();
     this.audio.suspend();
     this.ui.showPause();
   }
@@ -768,6 +1165,8 @@ export class Game {
       if (I.actPressed('pause')) this.ui.back();
     }
     if (this.state === 'paused') { this._render(0); I.endFrame(); return; }
+    // esperando shaders: ni simulación ni dibujo (queda el último cuadro; son milisegundos con todo en caché)
+    if (this.gate === 'closed' && this.state !== 'menu') { I.endFrame(); return; }
     this._tickTimers(dt);
 
     // ── cámara: giro y zoom (el zoom se recuerda) ──
@@ -797,8 +1196,9 @@ export class Game {
         // tirado en el piso o sacudido no se dispara ni se empuja
         const canAct = P.body.inControl && P.body.upright;
         // armas
-        for (let k = 0; k < 4; k++) if (I.actPressed('weapon' + (k + 1)) && A.switchTo(WEAPON_ORDER[k])) { this._setWeaponVisible(A.current); this.audio.switchWeapon(); }
-        if (I.actPressed('reload') && canAct && A.startReload()) this.audio.reload(A.current);
+        for (let k = 0; k < SLOT_COUNT; k++) if (I.actPressed('weapon' + (k + 1)) && A.switchSlot(k)) { this._setWeaponVisible(A.current); this.audio.switchWeapon(); this.audio.humStop(); }
+        if (I.actPressed('swap') && this._swapTarget) this._swapPickup(this._swapTarget);
+        if (I.actPressed('reload') && canAct && A.startReload()) this.audio.reload(A.def);
         if (I.actPressed('flashlight')) { P.flashlight = !P.flashlight; this.beam.visible = P.flashlight; }
         // interactuar: trepar lo que tenga adelante (escritorio, mesa); si no hay nada,
         // corriendo salta (vallas, cadáveres, huecos), si no, empujón. En el piso: levantarse ya
@@ -815,13 +1215,16 @@ export class Game {
             }
           } else if ((B.state === 'down' && B.downT > 0.12) || B.state === 'rest') B._startGetUp();
         }
-        const shot = A.tryFire(I.fire && canAct);
-        if (shot === 'empty') { this.audio.empty(); if (A.weapon.canReload) { A.startReload(); this.audio.reload(A.current); } }
+        this._buildTargets();
+        const shot = A.tryFire(I.fire && canAct, dt);
+        if (shot === 'empty') { this.audio.empty(); if (A.weapon.canReload) { A.startReload(); this.audio.reload(A.def); } }
         else if (shot) this.fire(shot);
         // recarga automática al vaciar
-        if (A.weapon.mag === 0 && A.weapon.canReload && !I.fire) { A.startReload(); this.audio.reload(A.current); }
+        if (A.weapon.mag < 1 && A.weapon.canReload && !I.fire) { A.startReload(); this.audio.reload(A.def); }
+        this._weaponHums(I.fire && canAct);
       }
       this._updatePickups(dt);
+      this._updateSwap();
       this._updateWaves(dt);
       if (this.mission) this.mission.update(dt);
       this.stats.time += dt;
@@ -829,19 +1232,27 @@ export class Game {
       P.update(dt, { mx: 0, mz: 0, run: false, aimX: P.aim.x, aimZ: P.aim.z }, this._fwd, this._rgt);
     }
 
-    // ── horda ──
-    this.zm.update(dt, P, this._hooks());
+    // con la armería abierta el menú no se ve: ni horda ni física (el cuadro es de las miniaturas)
+    if (!(this.state === 'menu' && this.armory && this.armory.active)) {
+      // ── horda (y después lo que le dejaron los tiros: fuego, frío, ácido, choque) ──
+      this.zm.update(dt, P, this._hooks());
+      this._buildTargets();
+      this.status.update(dt, (Z, dmg, def, kind) => this._statusDamage(Z, dmg, def, kind));
+      this.status.applySlows();
 
-    // ── física ──
-    for (let i = 0; i < w.bodies.length; i++) {
-      const b = w.bodies[i];
-      if (!b.update) continue;
-      b.update(dt);
-      // aterrizó recién (salto, brinco, bajada): golpe sordo según la altura
-      if (b.landT === 0 && b.lastLandDrop !== undefined && b.p) this.audio.thud(b.x, b.z, 0.35 + Math.min(1.2, b.lastLandDrop));
+      // ── física ──
+      for (let i = 0; i < w.bodies.length; i++) {
+        const b = w.bodies[i];
+        if (!b.update) continue;
+        b.update(dt);
+        // aterrizó recién (salto, brinco, bajada): golpe sordo según la altura
+        if (b.landT === 0 && b.lastLandDrop !== undefined && b.p) this.audio.thud(b.x, b.z, 0.35 + Math.min(1.2, b.lastLandDrop));
+      }
+      this.props.update(dt);
+      w.step(dt);
+      // proyectiles DESPUÉS del paso: barren contra los huesos donde quedaron este cuadro
+      this.ballistics.update(dt);
     }
-    this.props.update(dt);
-    w.step(dt);
     this.perf.phys = performance.now() - t0;
 
     // ── sonido ──
@@ -854,9 +1265,13 @@ export class Game {
 
     // ── efectos, HUD ──
     this.fx.update(dt);
+    this.shotfx.update(dt);
+    this.shotfx.drawProjectiles(this.ballistics.projectiles);
+    this._fleshSounds = 0;
     this.level.update(dt);
     if (playing) this._hud();
     this._render(dt);
+    if (this.state === 'menu') { this._uploadPrefetched(); this._openCurtain(dt); }
     this.perf.frame = performance.now() - t0;
     this.perf._acc += dt; this.perf._n++;
     if (this.perf._acc >= 0.5) {
@@ -881,18 +1296,24 @@ export class Game {
     return `${this.perf.fps.toFixed(0)} fps · frame ${this.perf.frame.toFixed(1)} ms · física ${this.perf.phys.toFixed(1)} ms\n` +
       `${s.particles} partículas · ${s.constraints} restricciones · ${s.bones} huesos · ${s.pairs} pares\n` +
       `zombis ${this.zm.alive} vivos / ${this.zm.zombies.length} · cadáveres ${this.corpses.n} · props despiertos ${this.props.awakeCount}\n` +
-      `huesos dibujados ${this.bodies.drawnBones} · calidad ${this.R.qualityName} · mapa ${this.mapId}`;
+      `huesos dibujados ${this.bodies.drawnBones} · calidad ${this.R.qualityName} · mapa ${this.mapId}\n` +
+      `proyectiles ${this.ballistics.projectiles.length} · sprites ${this.shotfx.live} · estados ${this.status.count} · arma ${this.player ? this.player.arsenal.current : '-'}`;
   }
 
   _hud() {
     const P = this.player, A = P.arsenal, W = A.weapon, M = this.mission;
     let objective = '', progress = '';
     if (M && M.current) { objective = M.describe(); progress = M.progress(); }
+    const D = W.def, R = RARITY[D.rarity];
+    const slots = [];
+    for (let i = 0; i < SLOT_COUNT; i++) { const k = A.inSlot(i); slots.push(k ? { key: k, color: RARITY[WEAPONS[k].rarity].color, cur: k === A.current } : null); }
     this.ui.hud({
       hp: P.hp, maxHp: P.maxHp, wave: this.wave, kills: this.stats.kills,
-      weapon: t('weapon.' + W.def.key), mag: W.mag, reserve: W.reserve, reloading: W.reloading > 0 ? 1 - W.reloading / W.def.reload : 0,
+      weapon: this.weaponLabel(D), weaponColor: R.color, weaponSub: tx(D.familyName).toLowerCase() + ' · ' + tx(R.name),
+      mag: Math.floor(W.mag), reserve: W.reserve, battery: D.regen ? W.mag / D.mag : -1, overheat: W.overheat > 0,
+      reloading: A.busy, spin: D.windup ? W.spin : -1,
       left: this.waveActive ? this.waveLeft + this.zm.alive : 0, between: this.waveActive ? 0 : this.betweenT,
-      owned: WEAPON_ORDER.filter(k => A.has(k)), current: A.current, flashlight: P.flashlight,
+      slots, flashlight: P.flashlight,
       objective, progress, flashKey: this.settings.keys.flashlight[0] || '',
     });
     this.ui.crosshair(this.input.mouseX, this.input.mouseY, W.def.spread, P.moving);
@@ -919,6 +1340,8 @@ export class Game {
   }
 
   _render(dt) {
+    // la armería abierta dibuja lo suyo (y el juego no gasta en su escena, tapada por el menú)
+    if (this.armory && this.armory.active) { this.armory.draw(dt); return; }
     const P = this.player, R = this.R, w = this.world;
     // daño en pantalla
     const dmg = this.state === 'playing' ? clamp01((1 - P.hp / P.maxHp) * 0.7 + P.damageFlash * 0.6) : (this.state === 'dead' ? clamp01(0.5 + P.deathT * 0.3) : 0);
@@ -934,11 +1357,11 @@ export class Game {
     // arma y linterna en las manos
     if (P && this.state !== 'menu') {
       const B = P.body;
-      const wm = this.weaponModels[P.arsenal.current];
+      const inst = this.heldInst;
       const hx = B.px(HAR), hy = B.py(HAR), hz = B.pz(HAR);
       const yaw = B.yaw;
-      if (wm && wm.group.visible) {
-        const dropped = !P.alive;
+      if (inst) {
+        const g = inst.group, dropped = !P.alive;
         // orientación del arma: apunta a donde mira el cuerpo; corriendo baja
         // (cruzada al pecho); el retroceso levanta la boca del caño; un bob y
         // un balanceo leves siguen el paso; en recarga se inclina un poco
@@ -946,27 +1369,39 @@ export class Game {
         const pitch = -0.62 * (1 - ab) - rc * 0.55 * P.lastKick + Math.cos(B.phase * 2) * 0.035 * B.gait * (1 - ab) * P.moving
           - Math.sin(Math.PI * clamp01((B.reloadT - 0.1) / 0.62)) * 0.25;
         const roll = -0.35 * (1 - ab) + Math.sin(B.phase) * 0.03 * P.moving;
-        wm.group.position.set(hx, hy, hz);
-        if (dropped) wm.group.rotation.set(1.2, yaw, 0.6);
-        else wm.group.rotation.set(pitch, yaw, roll, 'YXZ');
-        wm.group.updateMatrixWorld(true);
-        const m = this._muzzleWorld(this._v);
-        const dir = this._v2.set(0, 0, 1).applyQuaternion(wm.group.quaternion);
+        g.position.set(hx, hy, hz);
+        if (dropped) g.rotation.set(1.2, yaw, 0.6);
+        else g.rotation.set(pitch, yaw, roll, 'YXZ');
+        const W = P.arsenal.weapon;
+        animateWeapon(inst, dt, W && W.def.key === inst.key && W.def.windup ? W.spin : 0);
+        g.updateMatrixWorld(true);
+        const m = this._muzzleWorld(this._v, inst.muzzleIdx);
+        const dir = this._v2.set(0, 0, 1).applyQuaternion(g.quaternion);
         // la linterna va debajo del caño y sigue su orientación
         this.flashModel.position.set(m.x - dir.x * 0.16, m.y - 0.045 - dir.y * 0.16, m.z - dir.z * 0.16);
-        this.flashModel.quaternion.copy(wm.group.quaternion);
+        this.flashModel.quaternion.copy(g.quaternion);
         this.beam.position.set(m.x, m.y - 0.04, m.z);
-        this.beam.quaternion.copy(wm.group.quaternion);
+        this.beam.quaternion.copy(g.quaternion);
         this.beam.visible = P.flashlight && P.alive;
         const ty = Math.max(0.1, m.y + dir.y * 10);
         R.setFlashlight(m.x, m.y + 0.05, m.z, m.x + dir.x * 10, ty, m.z + dir.z * 10, P.flashlight && P.alive ? 260 : 0);
+        // mira láser (un hilo de luz hasta lo primero que toca) y telescópica (la cámara se adelanta)
+        const def = P.arsenal.def;
+        if (P.alive && this.state === 'playing') {
+          if (def.shot.fx.laser && B.aimBlend > 0.6) this._laserSight(m, def.shot.fx.laser);
+          R.scopeTarget = def.shot.scope && B.aimBlend > 0.7 ? def.shot.scope : 0;
+          // piloto del lanzallamas: una llamita siempre prendida
+          if (inst.proto.pilot && this.rng() < 0.7) { const pp = this._v3.copy(inst.proto.pilot).applyMatrix4(g.matrixWorld); this.shotfx.billboard(pp.x, pp.y, pp.z, 0.035, def.look.glow || '#fab387', 2.6, 0.05, 13, 0, this.rng() * 6); }
+        } else R.scopeTarget = 0;
       } else {
         R.setFlashlight(0, 0, 0, 0, 0, 0, 0);
         this.beam.visible = false;
+        R.scopeTarget = 0;
       }
     } else {
       R.setFlashlight(0, 0, 0, 0, 0, 0, 0);
       this.beam.visible = false;
+      R.scopeTarget = 0;
     }
 
     this.bodies.update(w, this.corpses);
@@ -989,6 +1424,7 @@ export class Game {
       o.apply(this, s[key]);
     }
     if (save) saveSettings(this.settings);
+    if (this.warm.key !== null) this.ensureWarm();     // sombras u otra calidad: otra topología de shaders
   }
   /** Aplica todos los ajustes guardados (al arrancar). */
   applyAllSettings() {

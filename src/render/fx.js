@@ -13,9 +13,18 @@ import { rnd, clamp01 } from '../core/util.js';
 const MAXD = 2400;   // despojos
 const MAXG = 900;    // brillos
 const MAXK = 700;    // manchas
+const MAXC = 600;    // casquillos a la vez
+const MAXS = 160;    // quemaduras
 
 // tipos de despojo
 const D_BLOOD = 0, D_GORE = 1, D_SHELL = 2, D_DEBRIS = 3;
+// casquillos: radio (m), largo/radio y color
+const CASING = {
+  pistol: { r: 0.0048, len: 3.2, c: [0.62, 0.48, 0.16] },
+  rifle: { r: 0.0055, len: 7.0, c: [0.66, 0.5, 0.18] },
+  shell: { r: 0.0095, len: 5.4, c: [0.56, 0.1, 0.08] },
+  link: { r: 0.0055, len: 6.0, c: [0.3, 0.3, 0.32] },
+};
 
 export class FX {
   constructor(scene, world) {
@@ -40,7 +49,16 @@ export class FX {
     this.dc = new Float32Array(MAXD * 3);   // color
     this.dt = new Uint8Array(MAXD);         // tipo
     this.dsp = new Float32Array(MAXD);      // giro
+    this.da = new Float32Array(MAXD);       // largo/radio (casquillos)
     this.dn = 0;
+
+    // ── casquillos: cilindros de verdad (latón, cartucho rojo, eslabón) ─────
+    this.casings = new THREE.InstancedMesh(new THREE.CylinderGeometry(1, 1, 1, 8), new THREE.MeshStandardMaterial({ roughness: 0.32, metalness: 0.75 }), MAXC);
+    this.casings.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.casings.frustumCulled = false;
+    this.casings.count = 0;
+    this.casings.setColorAt(0, new THREE.Color());
+    scene.add(this.casings);
 
     // ── brillos: aditivos, sin escribir profundidad ────────────────────────
     const ggeo = new THREE.IcosahedronGeometry(1, 0);
@@ -76,6 +94,16 @@ export class FX {
     this.decals.count = 0;
     this.decals.setColorAt(0, new THREE.Color());
     scene.add(this.decals);
+
+    // ── quemaduras (explosiones, rayos): la misma idea que las manchas, oscuras ──
+    this.scorchTex = makeScorchTexture();
+    this.scorches = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshLambertMaterial({
+      map: this.scorchTex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -5, polygonOffsetUnits: -5,
+    }), MAXS);
+    this.scorches.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.scorches.frustumCulled = false; this.scorches.renderOrder = 2; this.scorches.count = 0;
+    scene.add(this.scorches);
+    this.sn = 0; this.sHead = 0; this._smat = []; for (let i = 0; i < MAXS; i++) this._smat.push(new THREE.Matrix4());
     this.kn = 0;
     this.kHead = 0;
     this._kmat = [];
@@ -226,10 +254,28 @@ export class FX {
     }
   }
 
-  /** Casquillo que sale por la ventana de expulsión y tintinea en el piso. */
-  shell(x, y, z, dx, dz, size = 1) {
-    this._pushD(x, y, z, dx * (2 + rnd() * 2), 2.4 + rnd() * 1.6, dz * (2 + rnd() * 2),
-      0.019 * size, 9, 0.62, 0.48, 0.16, D_SHELL);
+  /**
+   * Casquillo que sale por la ventana de expulsión y tintinea en el piso.
+   * kind: pistol (corto) · rifle (largo) · shell (cartucho rojo de escopeta) · link (eslabón de cinta).
+   */
+  shell(x, y, z, dx, dz, size = 1, kind = 'pistol') {
+    const C = CASING[kind] || CASING.pistol;
+    const i = this._pushD(x, y, z, dx * (2 + rnd() * 2), 2.4 + rnd() * 1.6, dz * (2 + rnd() * 2),
+      C.r * size, 9, C.c[0], C.c[1], C.c[2], D_SHELL);
+    this.da[i] = C.len;
+  }
+
+  /** Quemadura en una superficie (piso o pared), orientada por la normal. */
+  scorch(x, y, z, radius, nx = 0, ny = 1, nz = 0) {
+    const i = this.sHead;
+    this.sHead = (this.sHead + 1) % MAXS;
+    if (this.sn < MAXS) this.sn++;
+    this._v.set(nx, ny, nz);
+    this._q.setFromUnitVectors(this._zAxis || (this._zAxis = new THREE.Vector3(0, 0, 1)), this._v);
+    this._q.premultiply((this._qs || (this._qs = new THREE.Quaternion())).setFromAxisAngle(this._v, rnd() * Math.PI * 2));
+    const sc = radius * (0.85 + rnd() * 0.3);
+    this._smat[i].compose((this._sp || (this._sp = new THREE.Vector3())).set(x + nx * 0.016, y + ny * 0.016, z + nz * 0.016), this._q, this._s.set(sc, sc, 1));
+    this._sdirty = true;
   }
 
   /** Trazadora: una línea que dura un suspiro. */
@@ -313,17 +359,27 @@ export class FX {
   _buildInstances() {
     const m = this._m, q = this._q, e = this._e, v = this._v, s = this._s, col = this._col;
 
-    // despojos
-    let n = 0;
+    // despojos (los casquillos van a su propia malla: cilindros, no piedritas)
+    let n = 0, nc = 0;
     for (let i = 0; i < this.dn; i++) {
       if (this.dl[i] <= 0) continue;
       const t = clamp01(this.dl[i] / this.dl0[i]);
-      const grow = this.dt[i] === D_BLOOD ? 1 : (0.35 + t * 0.65);
-      const r = this.dr[i] * grow;
       e.set(this.dx[i] * this.dsp[i], this.dy[i] * this.dsp[i], this.dz[i] * this.dsp[i]);
       q.setFromEuler(e);
-      const st = this.dt[i] === D_SHELL ? 2.4 : 1;
-      m.compose(v.set(this.dx[i], this.dy[i], this.dz[i]), q, s.set(r, r * st, r));
+      if (this.dt[i] === D_SHELL) {
+        if (nc >= MAXC) continue;
+        const r = this.dr[i];
+        m.compose(v.set(this.dx[i], this.dy[i], this.dz[i]), q, s.set(r, r * (this.da[i] || 2.4), r));
+        this.casings.setMatrixAt(nc, m);
+        const f = 0.7 + t * 0.3;
+        col.setRGB(this.dc[i * 3] * f, this.dc[i * 3 + 1] * f, this.dc[i * 3 + 2] * f);
+        this.casings.setColorAt(nc, col);
+        nc++;
+        continue;
+      }
+      const grow = this.dt[i] === D_BLOOD ? 1 : (0.35 + t * 0.65);
+      const r = this.dr[i] * grow;
+      m.compose(v.set(this.dx[i], this.dy[i], this.dz[i]), q, s.set(r, r, r));
       this.debris.setMatrixAt(n, m);
       const f = this.dt[i] === D_BLOOD ? 1 : (0.55 + t * 0.45);
       col.setRGB(this.dc[i * 3] * f, this.dc[i * 3 + 1] * f, this.dc[i * 3 + 2] * f);
@@ -333,6 +389,17 @@ export class FX {
     this.debris.count = n;
     this.debris.instanceMatrix.needsUpdate = true;
     if (this.debris.instanceColor) this.debris.instanceColor.needsUpdate = true;
+    this.casings.count = nc;
+    this.casings.visible = nc > 0;
+    if (nc) { this.casings.instanceMatrix.needsUpdate = true; if (this.casings.instanceColor) this.casings.instanceColor.needsUpdate = true; }
+
+    // quemaduras
+    if (this._sdirty) {
+      for (let i = 0; i < this.sn; i++) this.scorches.setMatrixAt(i, this._smat[i]);
+      this.scorches.count = this.sn;
+      this.scorches.instanceMatrix.needsUpdate = true;
+      this._sdirty = false;
+    }
 
     // brillos
     n = 0;
@@ -390,7 +457,8 @@ export class FX {
     this.dn = 0; this.gn = 0; this.kn = 0; this.kHead = 0;
     this.dl.fill(0); this.gl.fill(0);
     this.tr.length = 0;
-    this.debris.count = 0; this.glow.count = 0; this.decals.count = 0; this.tracer.count = 0;
+    this.debris.count = 0; this.glow.count = 0; this.decals.count = 0; this.tracer.count = 0; this.casings.count = 0;
+    this.sn = 0; this.sHead = 0; this.scorches.count = 0;
     this._kdirty = true;
   }
 }
@@ -440,5 +508,29 @@ function makeSplatTexture(size = 128) {
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.needsUpdate = true;
+  return tex;
+}
+
+// ── quemadura: centro negro, borde que se deshace en hollín ─────────────────
+function makeScorchTexture(size = 128) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const g = c.getContext('2d');
+  const cx = size / 2;
+  const grd = g.createRadialGradient(cx, cx, 0, cx, cx, cx);
+  grd.addColorStop(0, 'rgba(8,7,6,0.92)');
+  grd.addColorStop(0.45, 'rgba(14,12,10,0.8)');
+  grd.addColorStop(0.8, 'rgba(24,20,16,0.35)');
+  grd.addColorStop(1, 'rgba(24,20,16,0)');
+  g.fillStyle = grd;
+  g.fillRect(0, 0, size, size);
+  // hollín en rayos: manchitas alargadas hacia afuera
+  for (let i = 0; i < 70; i++) {
+    const a = Math.random() * Math.PI * 2, d = size * (0.2 + Math.random() * 0.28), r = size * (0.01 + Math.random() * 0.03);
+    g.fillStyle = 'rgba(10,9,8,' + (0.25 + Math.random() * 0.35).toFixed(3) + ')';
+    g.beginPath(); g.ellipse(cx + Math.cos(a) * d, cx + Math.sin(a) * d, r * 2.2, r, a, 0, Math.PI * 2); g.fill();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }

@@ -265,6 +265,8 @@ export class Ragdoll {
     this.idleT = R() * 10;
     // sólo para 'aim' (el jugador): 1 apuntando / 0 corriendo; retroceso; recarga
     this.aimBlend = 1; this.recoil = 0; this.reloadT = 0;
+    // cómo sostiene el arma el jugador: mano izquierda adelante (m), altura y lado (los define el arma)
+    this.aimFore = 0.14; this.aimUp = 0; this.aimSide = 0;
     // heridas: cada miembro tiene un "piso" de músculo (baja con el daño, para
     // siempre) y una fuerza actual que se recupera hacia ese piso. Además una
     // pierna baleada se dobla un rato y un brazo baleado cuelga un rato.
@@ -1797,11 +1799,11 @@ export class Ragdoll {
       const rl = this.reloadT;
       const dip = rl > 0 ? Math.sin(Math.PI * clamp01((rl - 0.1) / 0.62)) : 0;
       const hrx = lerp(0.17, 0.07, ab) * S + swA;
-      const hry = lerp(1.02, 1.30, ab) * S + bobA + pumpY + rc * 0.035 * S;
+      const hry = lerp(1.02, 1.30 + this.aimUp, ab) * S + bobA + pumpY + rc * 0.035 * S;
       const hrz = lerp(0.16, 0.36, ab) * S + pumpZ - rc * 0.06 * S;
-      const hlx = lerp(-0.07, -0.03, ab) * S + swA + dip * 0.11 * S;
-      const hly = lerp(1.11, 1.27, ab) * S + bobA + pumpY - dip * 0.24 * S + rc * 0.02 * S;
-      const hlz = lerp(0.28, 0.50, ab) * S + pumpZ - rc * 0.05 * S - dip * 0.20 * S;
+      const hlx = lerp(-0.07, -0.03 + this.aimSide, ab) * S + swA + dip * 0.11 * S;
+      const hly = lerp(1.11, 1.27 + this.aimUp, ab) * S + bobA + pumpY - dip * 0.24 * S + rc * 0.02 * S;
+      const hlz = lerp(0.28, 0.36 + this.aimFore, ab) * S + pumpZ - rc * 0.05 * S - dip * 0.20 * S;
       this._armIK(T, 1, hrx, hry, hrz, 0.9, -0.5, -0.3);
       this._armIK(T, 0, hlx, hly, hlz, -0.9, -0.6, -0.2);
       T[SHR * 3 + 2] += 0.03 * S * ab; T[SHL * 3 + 2] -= 0.02 * S * ab;

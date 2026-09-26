@@ -1,68 +1,111 @@
 // ─────────────────────────────────────────────────────────────────────────────
-//  weapons.js — Armas, munición y el disparo (hitscan contra huesos y paredes).
+//  weapons.js — El arsenal del jugador y el hitscan.
+//
+//  Las 104 armas viven en catalog.js (datos puros). Acá está lo que cambia
+//  mientras se juega: cuántas balas quedan, la recarga, la cadencia, las
+//  ráfagas, el giro previo de las rotativas, la carga del riel y las
+//  baterías que se regeneran y se recalientan.
+//
+//  El jugador lleva UNA arma por ranura (1 de mano · 2 subfusiles · 3
+//  escopetas · 4 fusiles · 5 pesadas). Agarrar una de una ranura ocupada
+//  suelta la anterior CON su munición: el juego la deja en el piso.
 //
 //  Un tiro es un rayo: primero contra los huesos de todos los cuerpos (el
 //  motor devuelve en qué hueso pegó y en qué punto del hueso), después contra
 //  los estáticos; gana el más cercano. El fusil atraviesa un cuerpo y sigue
 //  con menos daño. La escopeta tira nueve perdigones con dispersión y pierde
-//  fuerza con la distancia.
+//  fuerza con la distancia. Lo demás (proyectiles, rayos, relámpagos) está
+//  en ballistics.js.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const WEAPONS = {
-  pistol:  { key: 'pistol',  name: 'PISTOLA',  dmg: 30, rate: 6.5,  auto: false, spread: 0.018, pellets: 1, impulse: 7,  mag: 12, reserve: Infinity, reload: 1.05, range: 45, kick: 0.22, shake: 0.10, pierce: 0, falloff: 0 },
-  smg:     { key: 'smg',     name: 'SUBFUSIL', dmg: 17, rate: 13,   auto: true,  spread: 0.05,  pellets: 1, impulse: 4.5, mag: 32, reserve: 96, reload: 1.7,  range: 40, kick: 0.13, shake: 0.07, pierce: 0, falloff: 0 },
-  shotgun: { key: 'shotgun', name: 'ESCOPETA', dmg: 14, rate: 1.3,  auto: false, spread: 0.10,  pellets: 9, impulse: 9,  mag: 6,  reserve: 18, reload: 2.3,  range: 24, kick: 0.6,  shake: 0.32, pierce: 0, falloff: 1 },
-  rifle:   { key: 'rifle',   name: 'FUSIL',    dmg: 44, rate: 8.5,  auto: true,  spread: 0.028, pellets: 1, impulse: 13, mag: 30, reserve: 90, reload: 2.1,  range: 60, kick: 0.28, shake: 0.12, pierce: 1, falloff: 0 },
-};
-export const WEAPON_ORDER = ['pistol', 'smg', 'shotgun', 'rifle'];
+import { WEAPONS, WEAPON_ORDER, SLOT_COUNT } from './catalog.js';
+
+export { WEAPONS, WEAPON_ORDER };
+
+const EMPTY_CLICK_COOL = 0.25;      // clic en vacío: no repite a 60 Hz
+const SWITCH_TIME = 0.35;           // sacar un arma
+const REGEN_DELAY = 0.35;           // la batería empieza a cargar un rato después del último tiro
+const RESERVE_CAP_MAGS = 6;         // tope de reserva: seis cargadores (tres si el cargador es enorme)
+const CARRY_MAX = 0.034;            // resto de enfriamiento que se arrastra entre cuadros (dos cuadros a 60 fps)
 
 export class WeaponState {
-  constructor(def) {
+  /** @param ammo {mag, reserve} opcional: el arma levantada del piso trae lo que le quedaba */
+  constructor(def, ammo = null) {
     this.def = def;
-    this.mag = def.mag;
-    this.reserve = def.reserve;
+    this.mag = ammo ? Math.min(def.mag, ammo.mag) : def.mag;
+    this.reserve = ammo ? ammo.reserve : def.reserve;
     this.reloading = 0;
     this.cool = 0;
     this.trigger = false;    // para armas semiautomáticas: hay que soltar
+    this.burstLeft = 0;      // tiros que le debe la ráfaga en curso
+    this.spin = 0;           // 0..1: giro de la rotativa o carga del riel
+    this.overheat = 0;       // batería vacía: segundos hasta que vuelve llena
+    this.sinceShot = 99;
   }
-  get canReload() { return this.reloading <= 0 && this.mag < this.def.mag && this.reserve > 0; }
+  get canReload() { return !this.def.regen && this.reloading <= 0 && this.mag < this.def.mag && this.reserve > 0; }
+  get ammo() { return { mag: this.mag, reserve: this.reserve }; }
+  get reserveCap() { return this.def.mag * (this.def.mag > 90 ? 3 : RESERVE_CAP_MAGS); }
 }
 
 export class Arsenal {
   constructor() {
-    this.slots = { pistol: new WeaponState(WEAPONS.pistol) };
+    this.slots = new Array(SLOT_COUNT).fill(null);
+    this.slots[0] = new WeaponState(WEAPONS.pistol);
     this.current = 'pistol';
     this.switchT = 0;
+    this.dropped = null;     // lo último que soltó un cambio (el juego lo tira al piso)
   }
-  get weapon() { return this.slots[this.current]; }
+  /** Ranura (0..4) de un arma del catálogo. O(1). */
+  slotOf(kind) { return WEAPONS[kind].slot - 1; }
+  get weapon() { return this.slots[this.slotOf(this.current)]; }
   get def() { return this.weapon.def; }
-  has(kind) { return !!this.slots[kind]; }
+  has(kind) { const s = WEAPONS[kind] && this.slots[this.slotOf(kind)]; return !!s && s.def.key === kind; }
+  /** ¿Se puede levantar sin soltar nada? (ya la tiene: munición; o la ranura está libre) */
+  canTake(kind) { return this.has(kind) || !this.slots[this.slotOf(kind)]; }
+  /** Las que lleva, en orden de ranura. */
+  owned() { const o = []; for (const s of this.slots) if (s) o.push(s.def.key); return o; }
+  /** Lo que ocupa una ranura (o null). */
+  inSlot(i) { return this.slots[i] ? this.slots[i].def.key : null; }
 
-  /** Da un arma (o munición si ya la tiene). Devuelve true si es nueva. */
-  give(kind) {
-    if (this.slots[kind]) { this.addAmmo(kind, WEAPONS[kind].mag * 2); return false; }
-    this.slots[kind] = new WeaponState(WEAPONS[kind]);
-    this.switchTo(kind);
+  /**
+   * Da un arma. Si ya la tiene, suma munición y devuelve false. Si la ranura
+   * está ocupada por otra, la reemplaza y deja la vieja en `dropped` (con su
+   * munición). Devuelve true si el arma es nueva en la mano.
+   */
+  give(kind, ammo = null) {
+    const def = WEAPONS[kind];
+    if (!def) return false;
+    this.dropped = null;
+    if (this.has(kind)) { this.addAmmo(kind, ammo ? ammo.mag + (ammo.reserve === Infinity ? 0 : ammo.reserve) : def.mag * 2); return false; }
+    const i = this.slotOf(kind);
+    const prev = this.slots[i];
+    if (prev) this.dropped = prev;
+    this.slots[i] = new WeaponState(def, ammo);
+    if (prev && this.current === prev.def.key) this.current = kind;      // la que tenía en la mano ya no está
+    this.switchTo(kind, true);
     return true;
   }
   addAmmo(kind, n) {
-    const s = this.slots[kind];
-    if (!s || s.reserve === Infinity) return;
-    s.reserve = Math.min(s.reserve + n, s.def.mag * 6);
+    const s = this.slots[this.slotOf(kind)];
+    if (!s || s.def.key !== kind || s.reserve === Infinity) return;
+    s.reserve = Math.min(s.reserve + n, s.reserveCap);
   }
   /** Munición para todo lo que tenga. */
   ammoAll(f = 1) {
-    for (const k in this.slots) this.addAmmo(k, Math.round(this.slots[k].def.mag * 2 * f));
+    for (const s of this.slots) if (s) this.addAmmo(s.def.key, Math.round(s.def.mag * 2 * f));
   }
-  switchTo(kind) {
-    if (!this.slots[kind] || kind === this.current) return false;
-    this.weapon.reloading = 0;
+  switchTo(kind, force = false) {
+    if (!this.has(kind) || (kind === this.current && !force)) return false;
+    const cur = this.slots[this.slotOf(this.current)];
+    if (cur) { cur.reloading = 0; cur.burstLeft = 0; }
     this.current = kind;
-    this.switchT = 0.35;
+    this.switchT = SWITCH_TIME;
     return true;
   }
+  /** Tecla de ranura: saca lo que haya en la ranura i (0..4). */
+  switchSlot(i) { const s = this.slots[i]; return s ? this.switchTo(s.def.key) : false; }
   cycle(d) {
-    const owned = WEAPON_ORDER.filter(k => this.slots[k]);
+    const owned = this.owned();
     const i = owned.indexOf(this.current);
     return this.switchTo(owned[(i + d + owned.length) % owned.length]);
   }
@@ -70,38 +113,76 @@ export class Arsenal {
     const s = this.weapon;
     if (!s.canReload || this.switchT > 0) return false;
     s.reloading = s.def.reload;
+    s.burstLeft = 0;
     return true;
   }
   update(dt) {
     if (this.switchT > 0) this.switchT -= dt;
-    for (const k in this.slots) {
-      const s = this.slots[k];
+    for (const s of this.slots) {
+      if (!s) continue;
+      const d = s.def;
       if (s.cool > 0) s.cool -= dt;
+      s.sinceShot += dt;
       if (s.reloading > 0) {
         s.reloading -= dt;
         if (s.reloading <= 0) {
-          const need = s.def.mag - s.mag;
+          const need = d.mag - s.mag;
           const take = s.reserve === Infinity ? need : Math.min(need, s.reserve);
           s.mag += take;
           if (s.reserve !== Infinity) s.reserve -= take;
           s.reloading = 0;
         }
       }
+      if (d.regen) {
+        // batería: vacía se recalienta un rato y vuelve llena; si no, carga sola tras el último tiro
+        if (s.overheat > 0) { s.overheat -= dt; if (s.overheat <= 0) { s.overheat = 0; s.mag = d.mag; } }
+        else if (s.sinceShot > REGEN_DELAY && s.mag < d.mag) s.mag = Math.min(d.mag, s.mag + d.regen * dt);
+      }
     }
   }
+  /** Progreso de recarga o recalentamiento (0..1, para el HUD). */
+  get busy() {
+    const s = this.weapon;
+    if (s.reloading > 0) return 1 - s.reloading / s.def.reload;
+    if (s.overheat > 0) return 1 - s.overheat / s.def.reload;
+    return 0;
+  }
   /**
-   * ¿Dispara? `held` = gatillo apretado este frame. Devuelve la definición
-   * del arma si sale un tiro, 'empty' si hizo clic en vacío, null si nada.
+   * ¿Dispara? `held` = gatillo apretado este frame, `dt` para el giro previo.
+   * Devuelve la definición del arma si sale un tiro, 'empty' si hizo clic
+   * en vacío, null si nada. Máquina de estados chica: ráfaga en curso >
+   * gatillo suelto > bloqueos (cambio, recarga, cadencia, recalentado) >
+   * giro/carga > tiro.
    */
-  tryFire(held) {
+  tryFire(held, dt = 0) {
     const s = this.weapon, d = s.def;
+    if (d.windup) {
+      if (held && this.switchT <= 0 && s.reloading <= 0 && s.overheat <= 0 && s.mag >= 1) s.spin = Math.min(1, s.spin + dt / d.windup);
+      else s.spin = Math.max(0, s.spin - dt / (d.windup * 1.6));
+    }
+    if (s.burstLeft > 0) {
+      if (this.switchT > 0 || s.reloading > 0 || s.cool > 0) return null;
+      if (s.mag < 1) { s.burstLeft = 0; s.cool = EMPTY_CLICK_COOL; return 'empty'; }
+      s.burstLeft--;
+      return this._shoot(s, d, s.burstLeft > 0 ? 1 / d.burstRate : 1 / d.rate);
+    }
     if (!held) { s.trigger = false; return null; }
-    if (this.switchT > 0 || s.reloading > 0 || s.cool > 0) return null;
+    if (this.switchT > 0 || s.reloading > 0 || s.cool > 0 || s.overheat > 0) return null;
     if (!d.auto && s.trigger) return null;
+    if (d.windup && s.spin < 1) return null;
     s.trigger = true;
-    if (s.mag <= 0) { s.cool = 0.25; return 'empty'; }
+    if (s.mag < 1) { s.cool = EMPTY_CLICK_COOL; return 'empty'; }
+    if (d.burst) { s.burstLeft = d.burst - 1; return this._shoot(s, d, 1 / d.burstRate); }
+    if (d.windup && !d.auto) s.spin = 0;          // el riel: cada tiro vuelve a cargar
+    return this._shoot(s, d, 1 / d.rate);
+  }
+  _shoot(s, d, cooldown) {
     s.mag--;
-    s.cool = 1 / d.rate;
+    // el resto negativo del cuadro anterior se arrastra (hasta dos cuadros): a 60 fps una
+    // cadencia de 26/s daba 20/s porque el enfriamiento se redondeaba a 3 cuadros
+    s.cool = (s.cool < 0 && s.cool > -CARRY_MAX ? s.cool : 0) + cooldown;
+    s.sinceShot = 0;
+    if (d.regen && s.mag < 1) { s.mag = 0; s.overheat = d.reload; s.burstLeft = 0; }
     return d;
   }
 }

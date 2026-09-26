@@ -1,7 +1,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  audio.js — Todo el sonido, sintetizado con Web Audio. Cero archivos.
 //
-//  Disparos: ráfaga de ruido filtrada + golpe grave + clic. Zombis: dos
+//  Disparos: perfiles por arma (ruido filtrado, golpe grave, chasquido,
+//  barridos, FM, chisporroteo: ver SHOT_SOUNDS al final). Zombis: dos
 //  osciladores con vibrato pasando por formantes, distinto por bicho.
 //  Ambiente: ruido marrón muy bajo, un zumbido eléctrico y un colchón oscuro
 //  de dos sierras desafinadas que se abre cuando la cosa se pone fea.
@@ -109,43 +110,140 @@ export class GameAudio {
   }
 
   // ═══ armas ════════════════════════════════════════════════════════════════
-  shot(kind, x, z) {
+  /**
+   * Un disparo. `w` es la definición del arma (o, como antes, el nombre de un
+   * perfil). El perfil es una lista de capas (ruido filtrado, tono con
+   * barrido, FM, chisporroteo) — ver SHOT_SOUNDS. El silenciador baja todo y
+   * lo filtra; el tono varía ±4 % por tiro para que una ráfaga no suene a loop.
+   */
+  shot(w, x, z) {
     if (!this.ready) return;
     const ctx = this.ctx, t = ctx.currentTime;
     const own = x === undefined;
     const dest = own ? this.sfx : this._out(x, z, 1, 8, 40);
     if (!dest) return;
-    switch (kind) {
-      case 'pistol':
-        this._noise(this.white, dest, t, 0.16, { lp: 3200, hp: 120, peak: 0.55, decay: 0.12 });
-        this._tone('sine', 150, dest, t, 0.09, 0.5, 45);
-        this._noise(this.white, dest, t, 0.03, { lp: 9000, hp: 2000, peak: 0.35, decay: 0.02 });
-        break;
-      case 'smg':
-        this._noise(this.white, dest, t, 0.1, { lp: 3800, hp: 200, peak: 0.42, decay: 0.07 });
-        this._tone('sine', 130, dest, t, 0.06, 0.35, 50);
-        break;
-      case 'shotgun':
-        this._noise(this.white, dest, t, 0.42, { lp: 1600, hp: 60, peak: 0.9, decay: 0.3 });
-        this._tone('sine', 95, dest, t, 0.22, 0.8, 32);
-        this._noise(this.white, dest, t, 0.05, { lp: 7000, hp: 1500, peak: 0.4, decay: 0.035 });
-        break;
-      case 'rifle':
-        this._noise(this.white, dest, t, 0.2, { lp: 2600, hp: 90, peak: 0.7, decay: 0.15 });
-        this._tone('sine', 120, dest, t, 0.11, 0.6, 40);
-        this._noise(this.white, dest, t, 0.03, { lp: 10000, hp: 2500, peak: 0.45, decay: 0.02 });
-        break;
+    const name = typeof w === 'string' ? w : (w.shot && w.shot.sound) || 'pistol';
+    const silenced = typeof w === 'object' && w.shot && w.shot.fx && w.shot.fx.silenced;
+    const pitch = (typeof w === 'object' && w.shot && w.shot.pitch || 1) * (0.96 + Math.random() * 0.08);
+    const P = SHOT_SOUNDS[name] || SHOT_SOUNDS.pistol;
+    let out = dest;
+    if (silenced) {
+      // silenciado: pasa-bajos fuerte y la mitad de volumen (el "tup" en vez del estampido)
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1400;
+      const g = ctx.createGain(); g.gain.value = 0.42;
+      lp.connect(g); g.connect(dest); out = lp;
+    }
+    for (const L of P) this._layer(L, out, t, pitch);
+  }
+
+  /** Una capa de un perfil de sonido. */
+  _layer(L, dest, t0, pitch) {
+    const t = t0 + (L.at || 0);
+    if (L.n) {
+      // ruido: n = 'w' blanco / 'b' marrón
+      this._noise(L.n === 'b' ? this.brown : this.white, dest, t, L.dur, { lp: L.lp * pitch, hp: L.hp || 40, peak: L.peak, decay: L.decay ?? L.dur * 0.8, q: L.q ?? 0.7, attack: L.atk ?? 0.002 });
+    } else if (L.fm) {
+      // FM: la moduladora hace temblar a la portadora (plasma, iones)
+      const ctx = this.ctx;
+      const car = ctx.createOscillator(), mod = ctx.createOscillator(), mg = ctx.createGain(), G = ctx.createGain();
+      car.type = L.wave || 'sine'; car.frequency.setValueAtTime(L.f0 * pitch, t);
+      if (L.f1) car.frequency.exponentialRampToValueAtTime(L.f1 * pitch, t + L.dur);
+      mod.frequency.value = L.fm * pitch; mg.gain.value = L.depth || 80;
+      mod.connect(mg); mg.connect(car.frequency);
+      G.gain.setValueAtTime(0, t); G.gain.linearRampToValueAtTime(L.peak, t + 0.004); G.gain.exponentialRampToValueAtTime(0.001, t + L.dur);
+      car.connect(G); G.connect(dest);
+      car.start(t); mod.start(t); car.stop(t + L.dur + 0.05); mod.stop(t + L.dur + 0.05);
+    } else if (L.crackle) {
+      // chisporroteo: ráfagas cortitas de ruido agudo al azar (tesla)
+      for (let i = 0; i < L.crackle; i++) {
+        const tt = t + Math.random() * L.dur;
+        this._noise(this.white, dest, tt, 0.018, { lp: 9000, hp: 2500, peak: L.peak * (0.5 + Math.random() * 0.5), decay: 0.012 });
+      }
+    } else {
+      // tono con barrido
+      this._tone(L.wave || 'sine', L.f0 * pitch, dest, t, L.dur, L.peak, L.f1 ? L.f1 * pitch : null, L.atk ?? 0.002);
     }
   }
+
+  /** Estallido: golpe grave, cuerpo de ruido marrón, crujido y cola larga. Espacial. */
+  explosion(x, z, size = 1) {
+    if (!this.ready) return;
+    const t = this.ctx.currentTime;
+    const dest = x === undefined ? this.sfx : this._out(x, z, 1.1, 10, 55); if (!dest) return;
+    const k = Math.min(1.6, size);
+    this._tone('sine', 70, dest, t, 0.7 * k, 0.9, 24);
+    this._noise(this.brown, dest, t, 1.4 * k, { lp: 900, hp: 20, peak: 1.0, decay: 1.1 * k });
+    this._noise(this.white, dest, t, 0.35, { lp: 3200, hp: 300, peak: 0.45, decay: 0.25 });
+    for (let i = 0; i < 6; i++) this._noise(this.white, dest, t + 0.08 + Math.random() * 0.5, 0.03, { lp: 6000, hp: 1500, peak: 0.12, decay: 0.02 });
+  }
+  /** Clavo, virote o disco que pega en la pared. */
+  thunk(x, z, metal = false) {
+    if (!this.ready) return;
+    const t = this.ctx.currentTime;
+    const dest = this._out(x, z, 0.6, 6, 26); if (!dest) return;
+    this._noise(this.brown, dest, t, 0.08, { lp: metal ? 5000 : 1200, hp: 200, peak: 0.5, decay: 0.06 });
+    if (metal) this._tone('triangle', 1800 + Math.random() * 600, dest, t, 0.18, 0.08, 1500);
+  }
+  /** El relámpago que salta entre zombis. */
+  zap(x, z) {
+    if (!this.ready) return;
+    const t = this.ctx.currentTime;
+    const dest = this._out(x, z, 0.7, 6, 28); if (!dest) return;
+    for (let i = 0; i < 5; i++) this._noise(this.white, dest, t + Math.random() * 0.1, 0.02, { lp: 8000, hp: 2000, peak: 0.3, decay: 0.015 });
+    this._tone('sawtooth', 120, dest, t, 0.12, 0.08, 60);
+  }
+
+  /**
+   * Zumbidos continuos (rotativa girando, riel cargando, lanzallamas): un
+   * oscilador o un ruido que se prenden una vez y se modulan por cuadro.
+   * `level` 0..1; con 0 se apagan solos. O(1) por llamada.
+   */
+  hum(id, level, spec) {
+    if (!this.ready) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    this._hums = this._hums || {};
+    let H = this._hums[id];
+    if (!H && level <= 0.001) return;
+    if (!H) {
+      const G = ctx.createGain(); G.gain.value = 0; G.connect(this.sfx);
+      let src, filt = null;
+      if (spec.noise) {
+        src = ctx.createBufferSource(); src.buffer = this.white; src.loop = true;
+        filt = ctx.createBiquadFilter(); filt.type = 'bandpass'; filt.frequency.value = spec.f0; filt.Q.value = spec.q || 0.8;
+        src.connect(filt); filt.connect(G);
+      } else {
+        src = ctx.createOscillator(); src.type = spec.wave || 'sawtooth'; src.frequency.value = spec.f0;
+        filt = ctx.createBiquadFilter(); filt.type = 'lowpass'; filt.frequency.value = spec.lp || 1800;
+        src.connect(filt); filt.connect(G);
+      }
+      src.start();
+      H = this._hums[id] = { G, src, filt, spec };
+    }
+    const s = H.spec;
+    H.G.gain.setTargetAtTime(level * s.peak, t, 0.05);
+    const f = s.f0 + (s.f1 - s.f0) * level;
+    if (s.noise) H.filt.frequency.setTargetAtTime(f, t, 0.05); else H.src.frequency.setTargetAtTime(f, t, 0.03);
+  }
+  /** Apaga todos los zumbidos (cambio de arma, pausa, muerte). */
+  humStop() { if (!this._hums) return; const t = this.ctx.currentTime; for (const k in this._hums) this._hums[k].G.gain.setTargetAtTime(0, t, 0.04); }
+
   empty() {
     if (!this.ready) return;
     const t = this.ctx.currentTime;
     this._noise(this.white, this.sfx, t, 0.03, { lp: 5000, hp: 1500, peak: 0.25, decay: 0.02 });
   }
+  /** Recarga: dos chasquidos (o varios cartuchos de a uno en las escopetas, o el zumbido de la batería). */
   reload(kind) {
     if (!this.ready) return;
     const t = this.ctx.currentTime;
-    const dur = kind === 'shotgun' ? 0.5 : 0.35;
+    const fam = typeof kind === 'object' ? kind.family : kind;
+    if (fam === 'energy') { this._tone('sine', 220, this.sfx, t, 0.5, 0.06, 880, 0.2); return; }
+    if (fam === 'shotgun' || kind === 'shotgun') {
+      for (let i = 0; i < 3; i++) this._noise(this.white, this.sfx, t + i * 0.28, 0.04, { lp: 3500, hp: 700, peak: 0.22, decay: 0.03 });
+      this._noise(this.white, this.sfx, t + 0.95, 0.06, { lp: 4500, hp: 900, peak: 0.3, decay: 0.045 });
+      return;
+    }
+    const dur = fam === 'lmg' || fam === 'rotary' ? 0.8 : fam === 'launcher' ? 0.6 : 0.35;
     this._noise(this.white, this.sfx, t, 0.04, { lp: 4000, hp: 800, peak: 0.2, decay: 0.03 });
     this._noise(this.white, this.sfx, t + dur, 0.05, { lp: 5000, hp: 1200, peak: 0.28, decay: 0.035 });
     this._tone('square', 900, this.sfx, t + dur, 0.02, 0.05);
@@ -322,3 +420,64 @@ export class GameAudio {
     this.padLP.frequency.setTargetAtTime(200 + v * 500, t, 1.5);
   }
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  Perfiles de disparo. Cada capa:
+//    {n:'w'|'b', dur, lp, hp, peak, decay, at}     ruido blanco/marrón filtrado
+//    {wave, f0, f1, dur, peak, at}                 tono con barrido
+//    {fm, f0, f1, depth, dur, peak, wave}          FM (portadora + moduladora)
+//    {crackle: n, dur, peak}                       chasquidos al azar
+//  Las cuatro clásicas son EXACTAMENTE las de antes.
+// ═════════════════════════════════════════════════════════════════════════════
+const N = (n, dur, lp, hp, peak, decay, extra = {}) => ({ n, dur, lp, hp, peak, decay, ...extra });
+const T = (wave, f0, f1, dur, peak, extra = {}) => ({ wave, f0, f1, dur, peak, ...extra });
+
+export const SHOT_SOUNDS = {
+  pistol: [N('w', 0.16, 3200, 120, 0.55, 0.12), T('sine', 150, 45, 0.09, 0.5), N('w', 0.03, 9000, 2000, 0.35, 0.02)],
+  heavypistol: [N('w', 0.2, 2600, 100, 0.65, 0.15), T('sine', 120, 38, 0.12, 0.6), N('w', 0.03, 9000, 2000, 0.38, 0.02)],
+  magnum: [N('w', 0.32, 2200, 80, 0.85, 0.26), T('sine', 105, 34, 0.18, 0.75), N('w', 0.04, 10000, 2500, 0.45, 0.03), N('b', 0.5, 600, 30, 0.25, 0.45, { at: 0.05 })],
+  magnum_heavy: [N('w', 0.42, 1800, 60, 0.95, 0.34), T('sine', 80, 26, 0.26, 0.9), N('w', 0.05, 10000, 2200, 0.5, 0.035), N('b', 0.7, 500, 25, 0.35, 0.6, { at: 0.05 })],
+  smg_light: [N('w', 0.08, 4200, 260, 0.36, 0.055), T('sine', 150, 60, 0.05, 0.28)],
+  smg: [N('w', 0.1, 3800, 200, 0.42, 0.07), T('sine', 130, 50, 0.06, 0.35)],
+  smg_heavy: [N('w', 0.13, 3000, 150, 0.5, 0.09), T('sine', 110, 42, 0.08, 0.45), N('w', 0.02, 8000, 2200, 0.2, 0.015)],
+  shotgun: [N('w', 0.42, 1600, 60, 0.9, 0.3), T('sine', 95, 32, 0.22, 0.8), N('w', 0.05, 7000, 1500, 0.4, 0.035)],
+  shotgun_auto: [N('w', 0.3, 1900, 70, 0.8, 0.22), T('sine', 100, 34, 0.16, 0.7), N('w', 0.04, 7000, 1500, 0.35, 0.03)],
+  shotgun_slug: [N('w', 0.4, 1500, 55, 0.9, 0.3), T('sine', 85, 28, 0.24, 0.85), N('w', 0.06, 9000, 2400, 0.45, 0.04)],
+  rifle: [N('w', 0.2, 2600, 90, 0.7, 0.15), T('sine', 120, 40, 0.11, 0.6), N('w', 0.03, 10000, 2500, 0.45, 0.02)],
+  battle: [N('w', 0.28, 2300, 80, 0.8, 0.22), T('sine', 105, 34, 0.14, 0.7), N('w', 0.035, 10000, 2600, 0.5, 0.025), N('b', 0.4, 700, 30, 0.2, 0.35, { at: 0.04 })],
+  sniper: [N('w', 0.5, 2000, 70, 0.95, 0.4), T('sine', 90, 28, 0.2, 0.85), N('w', 0.05, 12000, 3200, 0.6, 0.04), N('b', 1.2, 500, 25, 0.3, 1.0, { at: 0.06 })],
+  amr: [N('w', 0.7, 1500, 50, 1.0, 0.55), T('sine', 65, 22, 0.32, 1.0), N('w', 0.06, 12000, 3000, 0.65, 0.045), N('b', 1.6, 400, 20, 0.45, 1.4, { at: 0.06 })],
+  lmg: [N('w', 0.2, 2500, 90, 0.66, 0.14), T('sine', 115, 40, 0.1, 0.55), N('w', 0.025, 9000, 2400, 0.38, 0.02)],
+  lmg_old: [N('w', 0.24, 2100, 80, 0.7, 0.17), T('sine', 100, 36, 0.12, 0.6), N('w', 0.03, 7000, 1800, 0.3, 0.02)],
+  minigun: [N('w', 0.07, 3400, 180, 0.34, 0.05), T('sine', 120, 55, 0.045, 0.28)],
+  gl: [T('sine', 190, 70, 0.12, 0.7), N('b', 0.25, 1200, 60, 0.6, 0.2), N('w', 0.04, 5000, 900, 0.25, 0.03)],
+  rocket: [N('w', 0.9, 2400, 120, 0.8, 0.8, { atk: 0.02 }), T('sawtooth', 90, 45, 0.5, 0.25), N('b', 1.1, 800, 30, 0.5, 1.0)],
+  rocket_swarm: [N('w', 0.5, 3200, 200, 0.6, 0.45, { atk: 0.01 }), T('sawtooth', 160, 70, 0.3, 0.18), N('w', 0.4, 4200, 300, 0.4, 0.35, { at: 0.08 })],
+  laser: [T('sawtooth', 1800, 320, 0.16, 0.18), T('sine', 900, 180, 0.2, 0.24), N('w', 0.05, 9000, 3000, 0.12, 0.04)],
+  laser_small: [T('square', 2200, 500, 0.1, 0.12), T('sine', 1300, 320, 0.13, 0.2)],
+  pulse: [T('square', 700, 180, 0.08, 0.14), { fm: 90, f0: 400, f1: 150, depth: 120, dur: 0.09, peak: 0.2 }],
+  plasma: [{ fm: 55, f0: 260, f1: 90, depth: 180, dur: 0.3, peak: 0.34, wave: 'triangle' }, N('b', 0.3, 900, 60, 0.4, 0.25), T('sine', 1400, 300, 0.12, 0.1)],
+  plasma_scatter: [{ fm: 70, f0: 300, f1: 110, depth: 200, dur: 0.26, peak: 0.34, wave: 'triangle' }, N('w', 0.25, 2200, 200, 0.4, 0.2)],
+  rail: [T('sine', 2400, 120, 0.5, 0.35), N('w', 0.08, 12000, 3500, 0.7, 0.06), T('sawtooth', 70, 30, 0.45, 0.5), N('b', 1.0, 600, 30, 0.3, 0.9, { at: 0.04 })],
+  tesla: [{ crackle: 14, dur: 0.22, peak: 0.4 }, T('sawtooth', 110, 55, 0.22, 0.22), N('w', 0.2, 6000, 1800, 0.25, 0.18)],
+  beam: [T('sawtooth', 420, 400, 0.09, 0.08), N('w', 0.09, 5000, 1800, 0.06, 0.08)],
+  ion: [{ fm: 30, f0: 180, f1: 60, depth: 140, dur: 0.8, peak: 0.45, wave: 'sine' }, N('b', 0.9, 700, 30, 0.6, 0.8), T('sine', 3000, 400, 0.4, 0.12)],
+  flame: [N('w', 0.12, 1400, 150, 0.22, 0.1, { atk: 0.02 }), N('b', 0.14, 500, 40, 0.2, 0.12)],
+  cryo: [N('w', 0.12, 6000, 1800, 0.16, 0.1, { atk: 0.02 }), N('w', 0.1, 2400, 600, 0.1, 0.09)],
+  acid: [T('sine', 300, 120, 0.2, 0.3), N('b', 0.3, 900, 80, 0.4, 0.25), N('w', 0.15, 3000, 800, 0.12, 0.12, { at: 0.05 })],
+  bow: [T('triangle', 170, 90, 0.18, 0.4), N('w', 0.05, 4000, 800, 0.25, 0.04), N('w', 0.2, 2500, 700, 0.1, 0.18, { at: 0.02 })],
+  flare: [T('sine', 210, 80, 0.1, 0.55), N('w', 1.2, 5200, 1400, 0.16, 1.1, { at: 0.04, atk: 0.1 })],
+  harpoon: [T('triangle', 120, 60, 0.25, 0.5), N('b', 0.3, 900, 60, 0.5, 0.25), N('w', 0.3, 3000, 700, 0.15, 0.28, { at: 0.03 })],
+  nail: [N('w', 0.05, 7000, 1600, 0.4, 0.035), T('square', 600, 200, 0.04, 0.1)],
+  saw: [N('w', 0.2, 5500, 900, 0.4, 0.18), T('sawtooth', 900, 1600, 0.3, 0.1), N('b', 0.2, 900, 60, 0.35, 0.15)],
+  sonic: [T('sine', 55, 30, 0.5, 0.9), T('sine', 110, 60, 0.35, 0.4), N('b', 0.5, 400, 20, 0.6, 0.45)],
+  vortex: [{ fm: 8, f0: 90, f1: 300, depth: 60, dur: 0.6, peak: 0.35, wave: 'sine' }, N('w', 0.6, 1200, 200, 0.2, 0.5, { atk: 0.2 })],
+};
+
+/** Zumbidos continuos por arma: el giro de la rotativa y la carga del riel. */
+export const HUMS = {
+  spin: { f0: 70, f1: 260, peak: 0.07, wave: 'sawtooth', lp: 900 },
+  charge: { f0: 220, f1: 1800, peak: 0.08, wave: 'sine', lp: 4000 },
+  flame: { noise: true, f0: 500, f1: 900, peak: 0.12, q: 0.6 },
+  cryo: { noise: true, f0: 3200, f1: 4200, peak: 0.08, q: 0.9 },
+};

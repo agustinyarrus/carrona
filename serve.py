@@ -65,6 +65,9 @@ class H(http.server.SimpleHTTPRequestHandler):
         self._text(405, 'solo GET', 'text/plain; charset=utf-8')
 
 http.server.ThreadingHTTPServer.allow_reuse_address = True
+# el juego pide ~50 módulos ES de una: con la cola por defecto (5) Windows rechaza conexiones
+# y un módulo que no carga deja el juego sin arrancar
+http.server.ThreadingHTTPServer.request_queue_size = 128
 with http.server.ThreadingHTTPServer(('localhost', PORT), partial(H, directory=DIR)) as httpd:
     url = f'http://localhost:{PORT}/'
     if '--no-open' not in argv:

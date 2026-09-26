@@ -1,6 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  progress.js — Lo que el jugador ya hizo: misiones cumplidas, mejores
-//  tiempos, intentos, récords del modo infinito por mapa. Se guarda en
+//  tiempos, intentos, récords del modo infinito por mapa, y la colección de
+//  armas (cuáles encontró y cuántas bajas hizo con cada una). Se guarda en
 //  localStorage bajo una sola clave; sin DOM, así se prueba en Node.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -8,7 +9,7 @@ export const PROGRESS_KEY = 'carrona.progress';
 export const PROGRESS_VERSION = 1;
 
 export function emptyProgress() {
-  return { v: PROGRESS_VERSION, missions: {}, infinite: {}, last: null };
+  return { v: PROGRESS_VERSION, missions: {}, infinite: {}, weapons: {}, last: null };
 }
 
 /** Deja un objeto de progreso bien formado aunque venga roto o viejo. */
@@ -38,8 +39,34 @@ export function normalizeProgress(raw) {
       };
     }
   }
+  if (raw.weapons && typeof raw.weapons === 'object') {
+    for (const k in raw.weapons) {
+      const w = raw.weapons[k];
+      if (!w || typeof w !== 'object' || !/^[a-z0-9]{1,24}$/.test(k)) continue;
+      p.weapons[k] = { found: !!w.found, kills: Number.isFinite(w.kills) ? Math.max(0, Math.floor(w.kills)) : 0 };
+    }
+  }
   if (typeof raw.last === 'string') p.last = raw.last;
   return p;
+}
+
+/**
+ * La colección: marca un arma como encontrada y/o le suma bajas. Devuelve
+ * true si es la primera vez que se encuentra (para guardar enseguida).
+ */
+export function recordWeapon(p, key, { found = false, kills = 0 } = {}) {
+  const w = p.weapons[key] || (p.weapons[key] = { found: false, kills: 0 });
+  const fresh = found && !w.found;
+  if (found) w.found = true;
+  if (kills > 0) w.kills += Math.floor(kills);
+  return fresh;
+}
+
+/** Cuántas armas distintas encontró. */
+export function weaponsFound(p) {
+  let n = 0;
+  for (const k in p.weapons) if (p.weapons[k].found) n++;
+  return n;
 }
 
 export function loadProgress(storage) {
