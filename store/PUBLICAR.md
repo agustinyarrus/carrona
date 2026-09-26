@@ -56,6 +56,7 @@ Contestar en este orden; los valores son los que corresponden a este juego tal c
 | Apps gubernamentales | **No** |
 | Funciones financieras | **No ofrece funciones financieras** |
 | Salud | **No es una app de salud** |
+| ID de publicidad | **No** (el manifest no pide `com.google.android.gms.permission.AD_ID`: sólo INTERNET y VIBRATE). 🚨 No aparece en la lista de «Configura la app»: lo reclama recién «Descripción general de la publicación» como *«Declaración incompleta de ID de publicidad»* y deja el botón de envío gris hasta contestarlo |
 | Categoría y detalles de contacto | Categoría **Acción** (Juegos); etiquetas: Shooter, Zombis, Supervivencia; email de contacto (público); sitio web: `https://github.com/agustinyarrus/carrona` |
 | Ficha de Play Store | paso 4 |
 
@@ -109,6 +110,10 @@ Producción (o **Pruebas → Prueba cerrada** si la cuenta es nueva; conviene ar
 5. Notas de la versión: `store/listing.json` → `releaseNotes` (es-419 y en-US), con las etiquetas
    `<es-419>…</es-419>` y `<en-US>…</en-US>`.
 6. **Siguiente → Guardar → Ir a la descripción general de la publicación → Enviar para revisión**.
+   En la prueba interna el botón es **«Guardar y publicar»**: sale sin revisión y el enlace de
+   instalación queda en *Verificadores → Copiar vínculo* (`play.google.com/apps/internaltest/…`).
+   Play habilita solo el factor de forma **Google Play Games para PC** (Configuración avanzada) y lo
+   manda en el mismo envío: el juego se maneja con teclado y mouse, así que se deja.
 
 Cada versión nueva: subir `package.json` (`x.y.z`), `mobile/package.json`, `src/core/version.js`,
 `node tools/apk.mjs --aab` (el `versionCode` sale solo de la versión: 2.1.1 → 20101, 2.1.2 → 20102) y
