@@ -27,6 +27,8 @@ export function canVibrate() {
  */
 export function haptic(ms, force = false) {
   if (!enabled || !canVibrate()) return false;
+  // sin un toque real del usuario todavía, Chrome bloquea vibrate() y lo grita en la consola: mejor ni pedirlo
+  if (navigator.userActivation && !navigator.userActivation.hasBeenActive) return false;
   const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
   if (!force && now - lastAt < MIN_GAP_MS) return false;
   lastAt = now;

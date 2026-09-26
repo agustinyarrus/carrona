@@ -5,11 +5,64 @@
 //  localStorage bajo una sola clave; sin DOM, así se prueba en Node.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { WEAPONS, WEAPON_ORDER, SLOT_COUNT } from './catalog.js';
+
 export const PROGRESS_KEY = 'carrona.progress';
 export const PROGRESS_VERSION = 1;
 
 export function emptyProgress() {
-  return { v: PROGRESS_VERSION, missions: {}, infinite: {}, weapons: {}, last: null };
+  return { v: PROGRESS_VERSION, missions: {}, infinite: {}, weapons: {}, loadout: defaultLoadout(), last: null };
+}
+
+// ── el equipo: qué arma va en cada ranura al arrancar CUALQUIER partida ──────
+// Todas las armas están disponibles desde la primera misión: el jugador arma su
+// equipo en el ARSENAL (EQUIPAR, también desde la pausa) y sale con las cinco
+// ranuras llenas. Los premios de las oleadas siguen cayendo para cambiar sobre
+// la marcha.
+
+/** Por defecto, la primera arma del catálogo de cada ranura (las clásicas y la pesada común): cinco ranuras llenas. O(catálogo). */
+export function defaultLoadout() {
+  const out = new Array(SLOT_COUNT).fill(null);
+  for (const k of WEAPON_ORDER) {
+    const d = WEAPONS[k], i = d.slot - 1;
+    if (out[i] === null && (d.classic || d.rarity === 0)) out[i] = k;
+  }
+  return out;
+}
+
+/** Un equipo bien formado: cada ranura con un arma de SU ranura; lo roto o faltante vuelve al defecto de esa ranura. */
+export function normalizeLoadout(raw) {
+  const out = defaultLoadout();
+  if (!Array.isArray(raw)) return out;
+  for (let i = 0; i < SLOT_COUNT; i++) {
+    const k = raw[i];
+    if (typeof k === 'string' && WEAPONS[k] && WEAPONS[k].slot - 1 === i) out[i] = k;
+  }
+  return out;
+}
+
+/** Pone un arma en la ranura que le corresponde. Devuelve true si el equipo cambió. */
+export function equip(p, key) {
+  const d = WEAPONS[key];
+  if (!d) return false;
+  if (!Array.isArray(p.loadout)) p.loadout = defaultLoadout();
+  const i = d.slot - 1;
+  if (p.loadout[i] === key) return false;
+  p.loadout[i] = key;
+  return true;
+}
+
+/**
+ * Con qué arranca una partida: el equipo completo y, si la misión pide un arma en la mano
+ * (`start.hold`: el polígono con el arma a probar), esa arma entra en su ranura aunque no
+ * estuviera equipada. Devuelve las armas en orden de ranura y cuál va en la mano. O(SLOT_COUNT).
+ */
+export function startWeapons(p, start) {
+  const slots = normalizeLoadout(p && p.loadout);
+  const hold = start && start.hold && WEAPONS[start.hold] ? start.hold : null;
+  if (hold) slots[WEAPONS[hold].slot - 1] = hold;
+  const weapons = slots.filter(Boolean);
+  return { weapons, hold: hold || weapons[0] };
 }
 
 /** Deja un objeto de progreso bien formado aunque venga roto o viejo. */
@@ -46,6 +99,7 @@ export function normalizeProgress(raw) {
       p.weapons[k] = { found: !!w.found, kills: Number.isFinite(w.kills) ? Math.max(0, Math.floor(w.kills)) : 0 };
     }
   }
+  p.loadout = normalizeLoadout(raw.loadout);
   if (typeof raw.last === 'string') p.last = raw.last;
   return p;
 }

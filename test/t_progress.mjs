@@ -77,5 +77,31 @@ const CAMP = [{ id: 'm1', mapId: 'office' }, { id: 'm2', mapId: 'parking' }, { i
   ok('sin storage no revienta', JSON.stringify(loadProgress(broken)) === JSON.stringify(emptyProgress()) && saveProgress(p, broken) === false);
 }
 
+// ── el equipo: todas las armas disponibles desde la primera misión ────────────
+{
+  const { defaultLoadout, normalizeLoadout, equip, startWeapons } = await import('../src/game/progress.js');
+  const { WEAPONS, SLOT_COUNT } = await import('../src/game/catalog.js');
+  const L = defaultLoadout();
+  ok('el equipo por defecto llena las cinco ranuras, cada arma en la suya', L.length === SLOT_COUNT && L.every((k, i) => WEAPONS[k] && WEAPONS[k].slot - 1 === i), L.join(' '));
+  ok('arranca con las clásicas: pistola, subfusil, escopeta, fusil, y una pesada común', L[0] === 'pistol' && L[1] === 'smg' && L[2] === 'shotgun' && L[3] === 'rifle' && WEAPONS[L[4]].rarity === 0 && WEAPONS[L[4]].slot === 5);
+  ok('un progreso vacío ya trae el equipo', JSON.stringify(emptyProgress().loadout) === JSON.stringify(L));
+  ok('un guardado viejo sin equipo lo recibe por defecto', JSON.stringify(normalizeProgress({ v: 1, missions: {} }).loadout) === JSON.stringify(L));
+  const roto = normalizeLoadout(['chimango', 'pistol', 'zzz', null, 42]);
+  ok('lo roto vuelve al defecto ranura por ranura (un arma en la ranura equivocada no vale)', roto[0] === 'chimango' && roto[1] === 'smg' && roto[2] === 'shotgun' && roto[3] === 'rifle' && roto[4] === L[4], roto.join(' '));
+  const p = emptyProgress();
+  ok('equipar pone el arma en SU ranura y avisa que cambió', equip(p, 'chimango') === true && p.loadout[0] === 'chimango' && p.loadout[1] === 'smg');
+  ok('equipar la misma otra vez no cambia nada; una clave falsa tampoco', equip(p, 'chimango') === false && equip(p, 'nada') === false && p.loadout[0] === 'chimango');
+  const pesada = Object.keys(WEAPONS).find(k => WEAPONS[k].slot === 5 && k !== L[4]);
+  equip(p, pesada);
+  ok('cada ranura es independiente', p.loadout[4] === pesada && p.loadout[0] === 'chimango' && p.loadout.length === SLOT_COUNT);
+  const S = startWeapons(p, { weapons: ['pistol'] });
+  ok('una misión arranca con el equipo completo (la lista vieja de la misión no manda) y la ranura 1 en la mano', S.weapons.length === 5 && S.weapons[0] === 'chimango' && S.hold === 'chimango' && S.weapons.includes(pesada));
+  const R = startWeapons(p, { weapons: ['pistol', 'guanaco'], hold: 'guanaco' });
+  ok('el polígono mete el arma a probar en su ranura y la pone en la mano, sin tocar el resto', R.hold === 'guanaco' && R.weapons[3] === 'guanaco' && R.weapons[0] === 'chimango' && R.weapons.length === 5);
+  ok('sin progreso ni misión: el equipo por defecto con la pistola en la mano', startWeapons(null, null).hold === 'pistol' && startWeapons(null, null).weapons.length === 5);
+  const st = mem(); saveProgress(p, st);
+  ok('el equipo se guarda y se vuelve a cargar tal cual', JSON.stringify(loadProgress(st).loadout) === JSON.stringify(p.loadout));
+}
+
 console.log(fails ? `\n${fails} PRUEBAS FALLARON` : '\nTODO VERDE');
 process.exit(fails ? 1 : 0);

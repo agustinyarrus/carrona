@@ -214,9 +214,11 @@ parábola donde está el mouse; los arpones, virotes, bengalas y cohetes van der
 del torso, con la gravedad compensada (un arpón apuntado al primero de una fila atraviesa a dos
 y se clava en el tercero).
 
-Arrancás con la pistola. Entre oleadas siguen cayendo las clásicas en su oleada de siempre, y
-además una del arsenal sorteada por rareza (las raras se abren a medida que avanzan las
-oleadas); los brutos sueltan armas y, muy de vez en cuando, un zombi común también. Cada arma
+Arrancás con las cinco ranuras llenas: tu **equipo**, que armás en el ARSENAL con EQUIPAR (una
+por ranura, de las 104; también desde la pausa, y ahí cambia en la mano al instante). Entre
+oleadas siguen cayendo las clásicas si no las llevás, y además una del arsenal sorteada por
+rareza (las raras pesan más a medida que avanzan las oleadas); los brutos sueltan armas y, muy
+de vez en cuando, un zombi común también. Cada arma
 va a su ranura: si está libre se levanta sola; si está ocupada aparece un cartel y **G** la
 cambia (la tuya queda en el piso con las balas que tenía). La colección se guarda: la armería
 muestra cuántas encontraste.
@@ -241,7 +243,8 @@ El menú es de botones: CONTINUAR (la próxima misión pendiente), CAMPAÑA, INF
 OPCIONES, PANTALLA COMPLETA y, cuando el navegador lo ofrece, INSTALAR. Un clic sobre una pantalla nunca
 llega al juego: no hay forma de arrancar una partida sin querer. Esc cierra la pantalla que esté
 arriba. Al morir: reintentar o volver al menú; al cumplir una misión: la siguiente, repetir o el
-menú. La pausa congela la simulación y el audio, y también se pausa sola si la pestaña se va atrás.
+menú. La pausa congela la simulación y el audio, y también se pausa sola si la pestaña se va atrás;
+desde la pausa se abre el ARSENAL para cambiar el equipo sin salir de la partida.
 
 Las opciones se generan desde un registro declarativo (`src/game/options.js`): cada opción se
 describe una vez (clave, grupo, tipo, rango, valor por defecto, cómo se aplica) y de ahí salen la
@@ -298,9 +301,12 @@ con un dedo apoyado, se sueltan todos (nadie vuelve a una partida con el persona
 La matemática (zona muerta, saturación, histéresis, ejes de cámara, ayuda de puntería) está en
 `src/core/sticks.js`, sin DOM, y `test/t_touch.mjs` la prueba.
 
-Armas: la pistola (munición infinita) de entrada; el subfusil cae en la oleada 2, la escopeta en
-la 3 y el fusil en la 5 (atraviesa un cuerpo), y el resto del arsenal por rareza (ver *El
-arsenal*). La cabeza recibe daño ×4. Los miembros se cortan con daño acumulado y sin una pierna
+Armas: **las 104 están disponibles desde la primera misión**. Salís con las cinco ranuras
+llenas con tu EQUIPO, que se arma en el ARSENAL con el botón EQUIPAR (también desde la pausa,
+y ahí el arma cambia en la mano al instante); por defecto, la pistola (munición infinita), el
+subfusil, la escopeta, el fusil (atraviesa un cuerpo) y la pesada común. Entre oleadas siguen
+cayendo armas sorteadas por rareza para cambiar sobre la marcha (ver *El arsenal*). La cabeza
+recibe daño ×4. Los miembros se cortan con daño acumulado y sin una pierna
 el zombi se arrastra. Entre oleadas caen munición, botiquines y armas.
 
 El jugador es **ágil**: contra una pared a toda velocidad atrapa con las manos y rebota (no se
@@ -872,7 +878,8 @@ node test/t_maps.mjs           # los cinco lugares construidos en Node: playerSt
                                # tope de la topología fija) y física
 node test/t_mission.mjs        # el manager de objetivos con un juego de mentira, las oleadas, y la
                                # campaña contra los mapas reales (cada punto que pide existe y se llega)
-node test/t_progress.mjs       # progreso: desbloqueos, récords, guardado roto o viejo
+node test/t_progress.mjs       # progreso: desbloqueos, récords, guardado roto o viejo, y el equipo (cinco ranuras
+                               # por defecto, equipar por ranura, lo roto vuelve al defecto, el polígono impone la mano)
 node test/t_options.mjs        # registro de opciones, ajustes viejos, teclas configurables, input, i18n
 node test/t_arsenal.mjs        # el arsenal: contrato del catálogo, ranuras, ráfagas y cadencias, acabados
                                # deterministas y sin costura, las 104 armas armadas (sin NaN, dentro del

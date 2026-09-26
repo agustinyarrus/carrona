@@ -163,6 +163,13 @@
   .card .fm { font-size: 9px; letter-spacing: .16em; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .card .rb { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--rc); opacity: .85; }
   .card .ck { position: absolute; right: 7px; top: 5px; font-size: 10px; color: #a6e3a1; }
+  .card .eq { position: absolute; left: 7px; top: 4px; font-size: 11px; color: var(--acc); text-shadow: 0 0 6px rgba(255,210,74,.6); }
+  .arm-loadout { margin-top: 6px; font-size: 10px; letter-spacing: .2em; color: var(--dim); }
+  .arm-loadout b { font-weight: 300; color: var(--acc); margin-right: 8px; }
+  .arm-loadout span { color: var(--fg); cursor: pointer; }
+  .arm-loadout span:hover { color: var(--acc); }
+  .arm-loadout i { font-style: normal; margin: 0 8px; color: #3a3d48; }
+  .btn:disabled { opacity: .5; cursor: default; }
   .arm-detail { display: grid; grid-template-rows: minmax(220px, 1.35fr) auto; gap: 0; min-height: 0; border: 1px solid var(--line); }
   .arm-view { position: relative; cursor: grab; min-height: 220px; }
   .arm-view:active { cursor: grabbing; }
@@ -233,7 +240,27 @@
     .title { font-size: clamp(40px, 9vw, 90px); } .stack { margin-top: 16px; gap: 6px; } .btn { padding: 8px 16px; font-size: 12px; min-width: 240px; }
     .keys { margin-top: 12px; font-size: 10px; } #progress-line, #best { margin-top: 6px; font-size: 10px; }
     .list { max-height: 46vh; } #opts { max-height: 58vh; } .stats { gap: 22px; margin-top: 14px; } .stats b { font-size: 26px; }
-    #armory { padding: 10px 14px; } .arm-grid { max-height: 30vh; }
+    /* el arsenal en un teléfono apaisado (384–411 dp de alto): cabecera chica, grilla que ocupa su columna
+       y la ficha compacta con la vista previa cediendo altura, así EQUIPAR / PROBAR quedan siempre en pantalla */
+    #armory { padding: 8px 12px 8px; }
+    #armory .title { font-size: 22px; letter-spacing: .3em; }
+    .arm-head { gap: 10px; align-items: center; }
+    .arm-head .sub { margin-top: 2px; font-size: 9px; letter-spacing: .18em; }
+    .arm-loadout { margin-top: 2px; font-size: 9px; }
+    .chip { padding: 4px 8px; font-size: 9px; letter-spacing: .14em; }
+    .arm-body { grid-template-columns: minmax(200px, 1fr) minmax(300px, 1.4fr); gap: 10px; margin-top: 6px; }
+    .arm-grid { max-height: none; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 6px; }
+    .card { padding: 4px 6px 6px; } .card .nm { font-size: 9px; margin-top: 2px; } .card .fm { font-size: 8px; }
+    .arm-detail { grid-template-rows: minmax(80px, 1fr) auto; overflow: hidden; }
+    .arm-view { min-height: 80px; } .arm-view .hint { display: none; }
+    .arm-info { padding: 6px 10px 8px; }
+    .arm-name { font-size: 15px; letter-spacing: .28em; }
+    .arm-meta { margin-top: 2px; font-size: 9px; letter-spacing: .16em; }
+    .arm-tag { display: none; }
+    .arm-stats { gap: 3px 14px; margin-top: 5px; } .st { font-size: 8px; letter-spacing: .14em; } .st .bar { height: 3px; margin-top: 2px; }
+    .arm-traits { margin-top: 5px; gap: 4px; } .arm-traits span { font-size: 8px; padding: 2px 6px; }
+    .arm-kills { margin-top: 3px; font-size: 8px; }
+    .arm-info .row { margin-top: 6px; gap: 8px; } .arm-info .btn { min-width: 0; padding: 7px 12px; font-size: 10px; }
   }
 
 </style>
@@ -304,7 +331,7 @@
 
 <div id="armory" class="screen">
   <div class="arm-head">
-    <div><div class="title mid" data-t="armory.title">ARSENAL</div><div class="sub" id="arm-sub"></div></div>
+    <div><div class="title mid" data-t="armory.title">ARSENAL</div><div class="sub" id="arm-sub"></div><div class="arm-loadout" id="arm-loadout"></div></div>
     <div class="arm-filters" id="arm-filters"></div>
   </div>
   <div class="arm-body">
@@ -319,7 +346,8 @@
         <div class="arm-traits" id="arm-traits"></div>
         <div class="arm-kills" id="arm-kills"></div>
         <div class="row">
-          <button class="btn primary" id="b-arm-try" data-t="armory.try">PROBAR EN EL POLÍGONO</button>
+          <button class="btn primary" id="b-arm-equip" data-t="armory.equip">EQUIPAR</button>
+          <button class="btn" id="b-arm-try" data-t="armory.try">PROBAR EN EL POLÍGONO</button>
           <button class="btn small" id="b-arm-fire" data-t="armory.fire">DISPARAR</button>
           <button class="btn small" id="b-arm-back" data-t="armory.back">VOLVER</button>
         </div>
@@ -342,6 +370,7 @@
   <div class="stack">
     <button class="btn primary" id="b-resume" data-t="pause.resume">SEGUIR</button>
     <button class="btn" id="b-pause-options" data-t="pause.options">OPCIONES</button>
+    <button class="btn" id="b-pause-armory" data-t="pause.armory">ARSENAL</button>
     <button class="btn" id="b-restart" data-t="pause.restart">REINICIAR</button>
     <button class="btn" id="b-pause-menu" data-t="pause.menu">SALIR AL MENÚ</button>
   </div>

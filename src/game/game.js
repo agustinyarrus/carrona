@@ -21,7 +21,7 @@ import { RARITY, SLOT_COUNT, rollWeapon, NEW_WEAPON_COUNT } from './catalog.js';
 import { Ballistics, AIM_CHEST, AIM_MIN_DIST } from './ballistics.js';
 import { StatusBoard } from './status.js';
 import { CAMPAIGN, missionById, infiniteMission, rangeMission, MissionManager, ITEM_STYLE } from './mission.js';
-import { loadProgress, saveProgress, recordAttempt, recordResult, recordInfinite, recordWeapon, weaponsFound, isMissionUnlocked, isInfiniteUnlocked, nextMission, missionsDone } from './progress.js';
+import { loadProgress, saveProgress, recordAttempt, recordResult, recordInfinite, recordWeapon, weaponsFound, isMissionUnlocked, isInfiniteUnlocked, nextMission, missionsDone, equip, startWeapons } from './progress.js';
 import { OPTIONS, optionByKey, defaultSettings, normalizeSettings, saveSettings, rebind, DEFAULT_KEYS } from './options.js';
 import { t, tx, setLang, getLang } from '../core/i18n.js';
 import { Materials } from '../render/materials.js';
@@ -410,10 +410,12 @@ export class Game {
     this._clearPickups();
     const P = this._makePlayer();
     const st = this.level.playerStart;
-    // arsenal inicial de la misión
-    const weapons = (def.start && def.start.weapons) || ['pistol'];
-    for (const k of weapons) { if (k !== 'pistol') P.arsenal.give(k); this._found(k); }
-    P.arsenal.switchTo(def.start && def.start.hold ? def.start.hold : weapons[0]); P.arsenal.switchT = 0;
+    // el arsenal inicial es el EQUIPO del jugador: las cinco ranuras desde la primera misión (todas las
+    // armas están disponibles desde el arranque); el polígono pone en la mano el arma a probar
+    const S = startWeapons(this.progress, def.start);
+    for (const k of S.weapons) { if (k !== 'pistol') P.arsenal.give(k); this._found(k); }
+    P.arsenal.dropped = null;                 // la pistola de fábrica reemplazada no cae al piso
+    P.arsenal.switchTo(S.hold); P.arsenal.switchT = 0;
     this.killsBy = Object.create(null);
     this.stats = { kills: 0, headshots: 0, severs: 0, wave: 0, time: 0, shots: 0, hits: 0 };
     this.wcfg = def.waves || null;
@@ -773,7 +775,7 @@ export class Game {
   /** El botón ATRÁS de Android: cierra lo que esté arriba; en el menú principal devuelve 'exit'. */
   backButton() {
     if (this.state === 'playing') { this.pause(); return 'handled'; }
-    if (this.state === 'paused') { if (this.ui.optionsOpen) this.ui.back(); else this.resume(); return 'handled'; }
+    if (this.state === 'paused') { if (this.ui.screen && this.ui.screen !== 'pause') this.ui.back(); else this.resume(); return 'handled'; }
     if (this.state === 'dead' || this.state === 'won') { if (this.ui.endScreenOn) this.startMenu(); return 'handled'; }
     if (this.ui.screen && this.ui.screen !== 'menu') { this.ui.back(); return 'handled'; }
     return 'exit';
@@ -1030,10 +1032,31 @@ export class Game {
 
   /** Lo que muestra la armería: las 104 con su estado en la colección. */
   armoryEntries() {
+    const L = this.progress.loadout || [];
     return WEAPON_ORDER.map(k => {
       const d = WEAPONS[k], rec = this.progress.weapons ? this.progress.weapons[k] : null;
-      return { key: k, def: d, name: this.weaponLabel(d), found: !!(rec && rec.found), kills: rec ? rec.kills || 0 : 0 };
+      return { key: k, def: d, name: this.weaponLabel(d), found: !!(rec && rec.found), kills: rec ? rec.kills || 0 : 0, equipped: L[d.slot - 1] === k };
     });
+  }
+  /** El equipo actual, en orden de ranura, con nombre para mostrar. */
+  loadoutInfo() { return (this.progress.loadout || []).map(k => ({ key: k, name: this.weaponLabel(WEAPONS[k]) })); }
+  /**
+   * EQUIPAR desde el arsenal: el arma pasa a ocupar su ranura del equipo, ahora y en todas las
+   * partidas que vengan. En una partida en curso (desde la pausa) cambia en la mano al instante.
+   */
+  equipWeapon(key) {
+    if (!WEAPONS[key]) return false;
+    if (equip(this.progress, key)) saveProgress(this.progress);
+    const P = this.player;
+    if (P && P.alive && (this.state === 'playing' || this.state === 'paused')) {
+      const A = P.arsenal;
+      if (!A.has(key)) { A.give(key); A.dropped = null; }
+      A.switchTo(key, true); A.switchT = 0;
+      this._setWeaponVisible(A.current);
+      this._found(key);
+      this.audio.switchWeapon();
+    }
+    return true;
   }
   armoryCounts() { return { found: weaponsFound(this.progress), total: WEAPON_ORDER.length, fresh: NEW_WEAPON_COUNT }; }
 
@@ -1212,7 +1235,7 @@ export class Game {
     // ── entrada global ──
     if (I.pressed('F3')) this.applySettings({ showFps: !this.settings.showFps });
     if (this.state === 'paused') {
-      if (I.actPressed('pause')) { if (this.ui.optionsOpen) this.ui.back(); else this.resume(); }
+      if (I.actPressed('pause')) { if (this.ui.screen && this.ui.screen !== 'pause') this.ui.back(); else this.resume(); }
     } else if (this.state === 'playing') {
       if (I.actPressed('pause')) this.pause();
     } else if (this.state === 'dead' || this.state === 'won') {
@@ -1220,7 +1243,8 @@ export class Game {
     } else if (this.state === 'menu') {
       if (I.actPressed('pause')) this.ui.back();
     }
-    if (this.state === 'paused') { this._render(0); I.endFrame(); return; }
+    // en pausa nada se mueve (dt 0)… salvo el arsenal abierto desde la pausa, que anima su vista previa
+    if (this.state === 'paused') { this._render(this.armory && this.armory.active ? dt : 0); I.endFrame(); return; }
     // esperando shaders: ni simulación ni dibujo (queda el último cuadro; son milisegundos con todo en caché)
     if (this.gate === 'closed' && this.state !== 'menu') { I.endFrame(); return; }
     this._tickTimers(dt);

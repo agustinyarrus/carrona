@@ -30,7 +30,7 @@ class UI {
     const ids = ['menu', 'campaign', 'infinite', 'armory', 'options', 'pause', 'death', 'win', 'hud', 'announce', 'toast', 'perf', 'crosshair', 'loading',
       'hpbar', 'hptxt', 'wave', 'kills', 'left', 'objective', 'weapon', 'weapon-sub', 'ammo', 'reload', 'spin', 'slots', 'flash', 'marker', 'prompt',
       'arm-sub', 'arm-filters', 'arm-grid', 'arm-view', 'arm-name', 'arm-meta', 'arm-tag', 'arm-stats', 'arm-traits', 'arm-kills',
-      'b-armory', 'b-arm-try', 'b-arm-fire', 'b-arm-back',
+      'b-armory', 'b-arm-try', 'b-arm-fire', 'b-arm-back', 'b-arm-equip', 'b-pause-armory', 'arm-loadout',
       'dstats', 'wstats', 'best', 'dbest', 'wbest', 'menu-sub', 'death-sub', 'win-sub', 'progress-line', 'keys', 'version',
       'mission-list', 'map-list', 'opts',
       'b-continue', 'b-campaign', 'b-infinite', 'b-options', 'b-fullscreen', 'b-install', 'b-campaign-back', 'b-infinite-back',
@@ -45,6 +45,7 @@ class UI {
     this.game = null;
     this.screen = null;          // qué pantalla está en primer plano
     this.optionsFrom = 'menu';   // desde dónde se abrieron las opciones
+    this.armoryFrom = 'menu';    // y el arsenal (desde la pausa, EQUIPAR cambia el arma en la mano)
     this._annT = null; this._toastT = null;
     this._installPrompt = null;
     this.armory = null;          // la armería (3D) se crea la primera vez que se abre
@@ -63,6 +64,7 @@ class UI {
     this._click(E.bArmory, () => this.showArmory());
     this._click(E.bArmTry, () => { if (this.armSel) { this._closeArmory(); this.game.startRange(this.armSel); } });
     this._click(E.bArmFire, () => { if (this.armory) this.armory.fireNow(); });
+    this._click(E.bArmEquip, () => { if (this.armSel) this._equipArmory(this.armSel); });
     this._click(E.bArmBack, () => this.back());
     this._click(E.bOptions, () => this.showOptions('menu'));
     this._click(E.bFullscreen, () => this.game.setFullscreen(!document.fullscreenElement));
@@ -73,6 +75,7 @@ class UI {
     this._click(E.bOptionsReset, () => { this.game.resetSettings(); this._renderOptions(); });
     this._click(E.bResume, () => this.game.resume());
     this._click(E.bPauseOptions, () => this.showOptions('pause'));
+    this._click(E.bPauseArmory, () => this.showArmory('pause'));
     this._click(E.bRestart, () => this.game.retry());
     this._click(E.bPauseMenu, () => this.game.quitToMenu());
     this._click(E.bRetry, () => this.game.retry());
@@ -169,7 +172,7 @@ class UI {
       if (this.game.input) this.game.input.cancelCapture();
       if (this.optionsFrom === 'pause') this.showPause(); else this.showMenu(this.game.menuInfo());
     } else if (this.screen === 'campaign' || this.screen === 'infinite') this.showMenu(this.game.menuInfo());
-    else if (this.screen === 'armory') { this._closeArmory(); this.showMenu(this.game.menuInfo()); }
+    else if (this.screen === 'armory') { this._closeArmory(); if (this.armoryFrom === 'pause') this.showPause(); else this.showMenu(this.game.menuInfo()); }
   }
   _fullscreenChanged() {
     const fs = !!document.fullscreenElement;
@@ -382,7 +385,8 @@ class UI {
    * (se pintan de a poco) y la ficha del arma elegida con su vista previa
    * disparando. La grilla se arma una vez; los filtros sólo esconden cartas.
    */
-  showArmory() {
+  showArmory(from = null) {
+    if (from) this.armoryFrom = from;
     this._show('armory');
     this.el.hud.classList.remove('on');
     const G = this.game, E = this.el;
@@ -396,8 +400,35 @@ class UI {
     else this._refreshArmoryFound();
     this.armory.open(E.armView);
     this._selectArmory(this.armSel || G.armoryEntries()[0].key);
+    this._renderLoadout();
   }
   _closeArmory() { if (this.armory && this.armory.active) this.armory.close(); }
+
+  /** EQUIPAR: la ranura del arma pasa a ser esa; en una partida en curso cambia en la mano. */
+  _equipArmory(key) {
+    const G = this.game;
+    if (!G.equipWeapon(key)) return;
+    this._refreshArmoryEquipped();
+    this._renderLoadout();
+    this._selectArmory(key);
+    if (this.armoryFrom === 'pause') this.toast(t('toast.equipped', { name: G.weaponLabel(WEAPONS[key]) }));
+  }
+  /** La línea del equipo: las cinco ranuras con su arma; tocar una la selecciona. */
+  _renderLoadout() {
+    const E = this.el;
+    if (!E.armLoadout) return;
+    E.armLoadout.innerHTML = `<b>${esc(t('armory.loadout'))}</b> ` + this.game.loadoutInfo().map((w, i) => `<span data-k="${esc(w.key)}">${i + 1} ${esc(w.name)}</span>`).join('<i>·</i>');
+    for (const s of E.armLoadout.querySelectorAll('span')) s.addEventListener('click', () => this._selectArmory(s.dataset.k));
+  }
+  _refreshArmoryEquipped() {
+    for (const it of this.game.armoryEntries()) {
+      const card = this._armCards && this._armCards.get(it.key);
+      if (!card) continue;
+      const mark = card.querySelector('.eq');
+      if (it.equipped && !mark) card.insertAdjacentHTML('beforeend', '<div class="eq">◆</div>');
+      else if (!it.equipped && mark) mark.remove();
+    }
+  }
 
   _buildArmoryGrid() {
     const G = this.game, E = this.el;
@@ -416,7 +447,7 @@ class UI {
       card.dataset.slot = d.slot;
       const cv = document.createElement('canvas'); cv.width = 256; cv.height = 128;
       card.appendChild(cv);
-      card.insertAdjacentHTML('beforeend', `<div class="nm">${esc(it.name)}</div><div class="fm">${esc(tx(d.familyName).toLowerCase())}</div><div class="rb"></div>${it.found ? '<div class="ck">✓</div>' : ''}`);
+      card.insertAdjacentHTML('beforeend', `<div class="nm">${esc(it.name)}</div><div class="fm">${esc(tx(d.familyName).toLowerCase())}</div><div class="rb"></div>${it.found ? '<div class="ck">✓</div>' : ''}${it.equipped ? '<div class="eq">◆</div>' : ''}`);
       card.addEventListener('click', () => this._selectArmory(it.key));
       E.armGrid.appendChild(card);
       this._armCards.set(it.key, card);
@@ -437,7 +468,7 @@ class UI {
   /** La ficha: nombre en el color de la rareza, familia, lema, barras, rasgos, bajas y la vista previa. */
   _selectArmory(key) {
     const G = this.game, E = this.el, d = WEAPONS[key];
-    if (!d) return;
+    if (!d || !this._armCards) return;      // sin la grilla armada (el arsenal no está abierto) no hay qué seleccionar
     this.armSel = key;
     for (const [k, card] of this._armCards) card.classList.toggle('sel', k === key);
     const sel = this._armCards.get(key);
@@ -453,6 +484,7 @@ class UI {
     E.armTraits.innerHTML = weaponTraits(d).map(tr => `<span>${esc(t('trait.' + tr))}</span>`).join('');
     const it = G.armoryEntries().find(x => x.key === key);
     E.armKills.textContent = it && it.found ? (it.kills ? t('armory.kills', { n: it.kills }) : t('armory.found')) : t('armory.notFound');
+    if (E.bArmEquip) { const eq = !!(it && it.equipped); E.bArmEquip.textContent = t(eq ? 'armory.equipped' : 'armory.equip'); E.bArmEquip.disabled = eq; }
     this.armory.select(key);
   }
 
