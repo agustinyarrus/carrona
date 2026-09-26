@@ -307,5 +307,36 @@ ok('release.yml: sólo acciones de primera parte (actions/*)', uses.length >= 3 
   }
 }
 
+// ── la ficha de Google Play: arte con las medidas exactas, textos dentro de los límites, privacidad, guía y subida ──
+{
+  const S = (...p) => path.join(process.cwd(), 'store', ...p);
+  /** Ancho y alto de un PNG leyendo el IHDR (sin dependencias). */
+  const png = (f) => { const b = fs.readFileSync(f); return b.readUInt32BE(12 + 4) === 0 ? null : { w: b.readUInt32BE(16), h: b.readUInt32BE(20), color: b[25] }; };
+  const icon = fs.existsSync(S('icon-512.png')) ? png(S('icon-512.png')) : null;
+  ok('store/icon-512.png: 512×512 sin canal alfa (Play lo pide de 32 bits pero aplanamos sobre el negro del juego)', icon && icon.w === 512 && icon.h === 512 && icon.color === 2, icon ? `${icon.w}×${icon.h} color ${icon.color}` : 'no está');
+  const fg = fs.existsSync(S('feature-graphic.png')) ? png(S('feature-graphic.png')) : null;
+  ok('store/feature-graphic.png: 1024×500', fg && fg.w === 1024 && fg.h === 500, fg ? `${fg.w}×${fg.h}` : 'no está');
+  const shotsDir = S('screenshots', 'phone');
+  const shots = fs.existsSync(shotsDir) ? fs.readdirSync(shotsDir).filter((f) => /\.png$/i.test(f)).sort() : [];
+  const medidas = shots.map((f) => png(path.join(shotsDir, f)));
+  ok('capturas de teléfono: entre 2 y 8, cada una entre 320 y 3840 px y con lado largo / corto ≤ 2 (16:9), 24 bits', shots.length >= 2 && shots.length <= 8 && medidas.every((m) => m && Math.min(m.w, m.h) >= 320 && Math.max(m.w, m.h) <= 3840 && Math.max(m.w, m.h) / Math.min(m.w, m.h) <= 2 && m.color === 2), `${shots.length}: ${medidas.map((m) => (m ? `${m.w}×${m.h}` : '?')).join(' ')}`);
+  const listing = JSON.parse(read(S('listing.json')));
+  const lim = { title: 30, shortDescription: 80, fullDescription: 4000 };
+  const langs = Object.keys(listing.listings);
+  ok('textos de la ficha en es-419, es-AR y en-US dentro de los límites de Play (30 / 80 / 4000)', langs.length >= 3 && langs.every((l) => Object.entries(lim).every(([k, n]) => { const f = path.join(process.cwd(), listing.listings[l][k]); return fs.existsSync(f) && read(f).trim().length > 0 && read(f).trim().length <= n; })), langs.join(' '));
+  ok('los textos no mencionan cosas que no son del juego ni prometen lo que no hay', langs.every((l) => !/anuncio|publicidad|compra|internet|online|multijugador/i.test(read(path.join(process.cwd(), listing.listings[l].fullDescription)).replace(/sin (publicidad|compras|cuenta|internet)|no ads|no purchases|no account|no internet/gi, ''))));
+  const priv = read(S('PRIVACY.md'));
+  ok('PRIVACY.md en los dos idiomas dice que no se recopila nada y nombra los dos permisos', /no recopila/i.test(priv) && /does not collect/i.test(priv) && /VIBRATE/.test(priv) && /INTERNET/.test(priv) && listing.privacyPolicy.includes('PRIVACY.md'));
+  ok('PUBLICAR.md: cuenta, formularios, clasificación, seguridad de datos, firma, subida y API', (() => { const g = read(S('PUBLICAR.md')); return /Seguridad de los datos/.test(g) && /Clasificación de contenido/.test(g) && /Firma de apps de Play/.test(g) && /12 testers/.test(g) && /play\.mjs/.test(g) && /--aab/.test(g); })());
+  ok('las notas de la versión y el paquete están en listing.json', listing.packageName === 'com.agustinyarrus.carrona' && listing.releaseNotes && listing.releaseNotes['es-419'] && listing.releaseNotes['en-US']);
+  const play = read(R('tools', 'play.mjs'));
+  ok('tools/play.mjs: API v3 (edición → bundle → pista → commit), JWT RS256 propio, reintentos, simulación y selftest', /androidpublisher\/v3/.test(play) && /RSA-SHA256/.test(play) && /:commit/.test(play) && /--dry-run/.test(play) && /--selftest/.test(play) && /429/.test(play));
+  const capCfg = JSON.parse(read(R('mobile', 'capacitor.config.json')));
+  ok('capacitor.config.json no fuerza la depuración del WebView: queda activa en debug y apagada en release (defecto de Capacitor)', !('webContentsDebuggingEnabled' in (capCfg.android || {})));
+  const tracked = execFileSync('git', ['ls-files', 'mobile', 'store'], { cwd: process.cwd(), encoding: 'utf8' });
+  ok('ni el keystore, ni keystore.properties, ni la clave de la cuenta de servicio están en git', !/\.jks|keystore\.properties|play-service-account/.test(tracked));
+  ok('apk.mjs arma el AAB (bundleRelease) y muestra la huella del certificado', /bundleRelease/.test(read(R('tools', 'apk.mjs'))) && /printcert/.test(read(R('tools', 'apk.mjs'))));
+}
+
 console.log(fails ? `\n${fails} PRUEBAS FALLARON` : '\nTODO VERDE');
 process.exit(fails ? 1 : 0);

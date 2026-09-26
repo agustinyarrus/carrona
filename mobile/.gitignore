@@ -15,6 +15,7 @@ android/app/src/main/assets/public/
 android/keystore.properties
 android/*.jks
 android/*.keystore
+android/play-service-account.json
 
 # de esta máquina
 android/local.properties

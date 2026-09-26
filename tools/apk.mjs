@@ -1,13 +1,15 @@
 // ─────────────────────────────────────────────────────────────────────────────
-//  apk.mjs — Arma el APK de CARRONA de punta a punta, con Node puro como el resto de tools/:
-//    node tools/apk.mjs [--release] [--install] [--run] [--serial <adb>] [--solo-gradle]
+//  apk.mjs — Arma el APK (o el AAB para Google Play) de CARRONA de punta a punta, con Node puro:
+//    node tools/apk.mjs [--release | --aab] [--install] [--run] [--serial <adb>] [--solo-gradle]
 //  1. build web para Android (dist-android/www; ver build.mjs --android)
 //  2. `cap sync android`: copia el www adentro del proyecto nativo (instala mobile/node_modules
 //     si falta; el juego en sí no tiene dependencias, sólo el envoltorio)
-//  3. Gradle: assembleDebug (firma de debug, instalable) o, con --release, assembleRelease
-//     (firmado si existe mobile/android/keystore.properties; si no, queda sin firmar)
-//  4. deja el APK con nombre en dist-android/CARRONA-x.y.z[-debug|-sinfirmar].apk
-//  5. opcional: lo instala (adb install -r) y lo abre en el teléfono o emulador conectado
+//  3. Gradle: assembleDebug (firma de debug, instalable); con --release, assembleRelease; con
+//     --aab, bundleRelease (el Android App Bundle que pide Play). Release y AAB salen firmados
+//     con la clave de mobile/android/keystore.properties si existe; si no, sin firmar
+//  4. deja el archivo con nombre en dist-android/CARRONA-x.y.z[-debug|-sinfirmar].{apk,aab} y,
+//     si está firmado, muestra la huella SHA-256 del certificado (la que Play registra)
+//  5. opcional: instala el APK (adb install -r) y lo abre en el teléfono o emulador conectado
 //  Requisitos: JDK 17+, el SDK de Android (ANDROID_HOME / ANDROID_SDK_ROOT / el de Android
 //  Studio). Escribe mobile/android/local.properties si no está: con barras normales, porque el
 //  parser de propiedades de Java se come las invertidas y Gradle termina buscando el SDK en
@@ -34,7 +36,8 @@ const MIN_JDK = 17;
 const argv = process.argv.slice(2);
 const flag = (f) => argv.includes(f);
 const opt = (f) => { const i = argv.indexOf(f); return i >= 0 ? argv[i + 1] : null; };
-const RELEASE = flag('--release');
+const AAB = flag('--aab');
+const RELEASE = flag('--release') || AAB;
 const RUN = flag('--run');
 const INSTALL = flag('--install') || RUN;
 const SOLO_GRADLE = flag('--solo-gradle');
@@ -83,7 +86,29 @@ function sdkDir() {
 }
 
 const gameVersion = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
-console.log(`\n${K.lila('CARRONA')} ${K.gris('·')} APK ${K.crema(gameVersion)} ${K.gris(RELEASE ? '· release' : '· debug')}`);
+console.log(`\n${K.lila('CARRONA')} ${K.gris('·')} ${AAB ? 'AAB' : 'APK'} ${K.crema(gameVersion)} ${K.gris(RELEASE ? '· release' : '· debug')}`);
+
+/**
+ * Huella SHA-256 del certificado con el que está firmado un APK/AAB, o null si no está firmado.
+ * El AAB lleva firma JAR (la lee keytool); el APK con minSdk ≥ 24 sale firmado sólo con el esquema
+ * v2/v3 (sin META-INF), que keytool no ve: ahí manda apksigner (build-tools).
+ */
+function huellaFirma(archivo) {
+  if (/\.apk$/i.test(archivo)) {
+    const bt = path.join(sdk, 'build-tools');
+    const versiones = fs.existsSync(bt) ? fs.readdirSync(bt).filter((v) => fs.existsSync(path.join(bt, v, WIN ? 'apksigner.bat' : 'apksigner'))).sort((a, b) => b.localeCompare(a, undefined, { numeric: true })) : [];
+    if (!versiones.length) return null;
+    const apksigner = path.join(bt, versiones[0], WIN ? 'apksigner.bat' : 'apksigner');
+    const r = WIN ? spawnSync('cmd.exe', ['/c', apksigner, 'verify', '--print-certs', archivo], { encoding: 'utf8', windowsHide: true })
+      : spawnSync(apksigner, ['verify', '--print-certs', archivo], { encoding: 'utf8', windowsHide: true });
+    const m = /certificate SHA-256 digest:\s*([0-9a-f]{64})/i.exec(r.stdout || '');
+    return m ? m[1].toUpperCase().match(/../g).join(':') : null;
+  }
+  const keytool = process.env.JAVA_HOME ? path.join(process.env.JAVA_HOME, 'bin', WIN ? 'keytool.exe' : 'keytool') : 'keytool';
+  const r = spawnSync(keytool, ['-printcert', '-jarfile', archivo], { encoding: 'utf8', windowsHide: true });
+  const m = /SHA256:\s*([0-9A-F:]+)/i.exec(r.stdout || '');
+  return m ? m[1] : null;
+}
 
 paso('El entorno: JDK y SDK de Android');
 const { java, mayor } = jdkMayor();
@@ -117,23 +142,26 @@ if (SOLO_GRADLE) {
 }
 
 // ── 3: Gradle ─────────────────────────────────────────────────────────────────
-const tarea = RELEASE ? 'assembleRelease' : 'assembleDebug';
+const tarea = AAB ? 'bundleRelease' : RELEASE ? 'assembleRelease' : 'assembleDebug';
 paso(`Gradle ${tarea} (la primera vez baja el wrapper y las dependencias: minutos)`);
 const keystore = fs.existsSync(path.join(ANDROID, 'keystore.properties'));
-if (RELEASE) nota(keystore ? 'firma: la clave de mobile/android/keystore.properties' : K.ambar('sin keystore.properties: el APK de release queda SIN FIRMAR (no se instala así)'));
+if (RELEASE) nota(keystore ? 'firma: la clave de mobile/android/keystore.properties' : K.ambar(`sin keystore.properties: el ${AAB ? 'AAB' : 'APK'} de release queda SIN FIRMAR (Play no lo acepta; el APK no se instala)`));
 if (WIN) correr(path.join(ANDROID, 'gradlew.bat'), [tarea, '--console=plain', '-q'], { cwd: ANDROID, shell: true });
 else correr(path.join(ANDROID, 'gradlew'), [tarea, '--console=plain', '-q'], { cwd: ANDROID });
 
 // ── 4: el APK con nombre ──────────────────────────────────────────────────────
-const salida = path.join(ANDROID, 'app', 'build', 'outputs', 'apk', RELEASE ? 'release' : 'debug');
-const candidatos = fs.existsSync(salida) ? fs.readdirSync(salida).filter((f) => f.endsWith('.apk')).map((f) => path.join(salida, f)) : [];
-if (!candidatos.length) morir(`Gradle terminó pero no hay .apk en ${salida}`);
+const EXT = AAB ? '.aab' : '.apk';
+const salida = AAB ? path.join(ANDROID, 'app', 'build', 'outputs', 'bundle', 'release') : path.join(ANDROID, 'app', 'build', 'outputs', 'apk', RELEASE ? 'release' : 'debug');
+const candidatos = fs.existsSync(salida) ? fs.readdirSync(salida).filter((f) => f.endsWith(EXT)).map((f) => path.join(salida, f)) : [];
+if (!candidatos.length) morir(`Gradle terminó pero no hay ${EXT} en ${salida}`);
 const apkSrc = candidatos.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
-const sinFirmar = /unsigned/.test(path.basename(apkSrc));
+// el AAB no lleva «unsigned» en el nombre: la firma se comprueba leyendo el certificado
+const huella = RELEASE ? huellaFirma(apkSrc) : null;
+const sinFirmar = RELEASE ? !huella : false;
 const tipo = RELEASE ? (sinFirmar ? 'release sin firmar' : 'release firmado') : 'debug';
 const sufijo = RELEASE ? (sinFirmar ? '-sinfirmar' : '') : '-debug';
 fs.mkdirSync(DIST, { recursive: true });
-const apk = path.join(DIST, `CARRONA-${gameVersion}${sufijo}.apk`);
+const apk = path.join(DIST, `CARRONA-${gameVersion}${sufijo}${EXT}`);
 fs.copyFileSync(apkSrc, apk);
 const bytes = fs.statSync(apk).size;
 const sha = crypto.createHash('sha256').update(fs.readFileSync(apk)).digest('hex');
@@ -142,6 +170,7 @@ const sha = crypto.createHash('sha256').update(fs.readFileSync(apk)).digest('hex
 let aparato = null;
 if (INSTALL) {
   paso(`Instalo${RUN ? ' y abro' : ''} en el aparato conectado`);
+  if (AAB) morir('un AAB no se instala con adb (es para Play): armá el APK con --release o sin nada');
   if (sinFirmar) morir('un APK sin firmar no se puede instalar: armá con --release y keystore.properties, o sin --release (firma de debug)');
   const adb = path.join(sdk, 'platform-tools', WIN ? 'adb.exe' : 'adb');
   const sel = SERIAL ? ['-s', SERIAL] : [];
@@ -161,10 +190,11 @@ if (INSTALL) {
 // ── la tarjeta ────────────────────────────────────────────────────────────────
 const filas = [
   ['versión', `${gameVersion}  ${K.gris(`(versionCode ${gameVersion.split('.').reduce((acc, n) => acc * 100 + +n, 0)})`)}`],
-  ['tipo', tipo === 'debug' ? K.cian(tipo) : sinFirmar ? K.ambar(tipo) : K.verde(tipo)],
+  ['tipo', `${AAB ? 'AAB · ' : ''}${tipo === 'debug' ? K.cian(tipo) : sinFirmar ? K.ambar(tipo) : K.verde(tipo)}`],
   ['tamaño', MB(bytes)],
   ['sha256', K.gris(sha)],
-  ['apk', path.relative(ROOT, apk)],
+  ...(huella ? [['firma', `${K.gris('SHA-256 del certificado')} ${huella}`]] : []),
+  [AAB ? 'aab' : 'apk', path.relative(ROOT, apk)],
   ...(aparato ? [['aparato', `${aparato}${RUN ? '  · abierto' : ''}`]] : []),
   ['tiempo', seg().trim()],
 ];

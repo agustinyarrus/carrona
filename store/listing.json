@@ -1,0 +1,26 @@
+{
+  "packageName": "com.agustinyarrus.carrona",
+  "defaultLanguage": "es-419",
+  "category": "GAME_ACTION",
+  "contactEmail": "agustinyarrus@users.noreply.github.com",
+  "contactWebsite": "https://github.com/agustinyarrus/carrona",
+  "privacyPolicy": "https://github.com/agustinyarrus/carrona/blob/main/store/PRIVACY.md",
+  "price": "free",
+  "ads": false,
+  "inAppPurchases": false,
+  "targetAudience": "18+",
+  "listings": {
+    "es-419": { "title": "store/es-AR/titulo.txt", "shortDescription": "store/es-AR/descripcion-corta.txt", "fullDescription": "store/es-AR/descripcion-completa.txt" },
+    "es-AR": { "title": "store/es-AR/titulo.txt", "shortDescription": "store/es-AR/descripcion-corta.txt", "fullDescription": "store/es-AR/descripcion-completa.txt" },
+    "en-US": { "title": "store/en-US/title.txt", "shortDescription": "store/en-US/short-description.txt", "fullDescription": "store/en-US/full-description.txt" }
+  },
+  "images": {
+    "icon": "store/icon-512.png",
+    "featureGraphic": "store/feature-graphic.png",
+    "phoneScreenshots": "store/screenshots/phone"
+  },
+  "releaseNotes": {
+    "es-419": "Primera versión en Google Play: 104 armas desde el primer minuto, cinco lugares, campaña de ocho misiones y modo infinito, controles táctiles con dos sticks, vibración y opción para zurdos.",
+    "en-US": "First Google Play release: 104 weapons from minute one, five places, an eight-mission campaign and endless mode, twin-stick touch controls, haptics and a left-handed option."
+  }
+}

@@ -7,7 +7,6 @@
   },
   "android": {
     "backgroundColor": "#06070aff",
-    "allowMixedContent": false,
-    "webContentsDebuggingEnabled": true
+    "allowMixedContent": false
   }
 }

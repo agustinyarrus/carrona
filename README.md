@@ -388,6 +388,23 @@ base64), `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` y `ANDROID_KEY_PASSWOR
 como `CARRONA-x.y.z.apk`; si no, sale `CARRONA-x.y.z-debug.apk` (firma de debug: se instala
 igual, pero una versión nueva no actualiza una instalada con otra firma).
 
+#### Google Play
+
+Todo lo que pide la ficha está en `store/`: los textos en castellano e inglés (`es-AR/`, `en-US/`,
+dentro de los límites de 30 / 80 / 4000 caracteres), el ícono de 512, el gráfico destacado de
+1024×500, ocho capturas de teléfono de 1920×1080 (Play exige lado largo / lado corto ≤ 2), la
+política de privacidad (`PRIVACY.md`: el juego no recopila nada) y **`PUBLICAR.md`**, el paso a
+paso completo de Play Console con las respuestas de cada formulario (clasificación de contenido,
+seguridad de los datos, público objetivo, firma de apps). El arte se regenera con
+`node tools/store_shots.mjs` (Chrome emulando un teléfono de 1920×1080, con el juego servido en
+`localhost:8767`) y `python tools/store_art.py` (ícono, gráfico destacado, capturas a 24 bits).
+`node tools/apk.mjs --aab` arma el Android App Bundle firmado con
+`mobile/android/keystore.properties` y muestra la huella SHA-256 del certificado, y
+`tools/play.mjs` sube ficha e imágenes y publica el AAB en una pista por la API oficial
+(`--listing --images`, `--upload <aab> --track internal|production`, `--dry-run`, `--selftest`)
+con una cuenta de servicio de la consola. `t_build` verifica las medidas del arte, los límites de
+los textos y que ninguna clave esté en git.
+
 ## El core
 
 Veinte mil líneas de JavaScript sin framework. Estas son las piezas y por qué son así.

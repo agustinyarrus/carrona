@@ -1,0 +1,23 @@
+Un lugarcito. Muchos zombis. Vos, una linterna y el arsenal que elijas.
+
+CARRONA es un shooter de zombis visto desde arriba donde cada cuerpo es una simulación física de verdad: los zombis no reproducen animaciones, caminan, corren, tropiezan, se estrellan contra las paredes, trepan escritorios y se caen porque un modelo de músculos los sostiene. Cuando les disparás, el impacto mueve la parte que tocaste: un tiro en el hombro tira el hombro atrás, uno en la pierna los desploma, uno en la cabeza los apaga. Sin una pierna se arrastran hacia vos igual.
+
+LOS LUGARES
+Una oficina de noche, un estacionamiento, un supermercado, una estación de subte y un hospital: escenarios low poly con luces reales, sombras y niebla, cada uno con su propio ritmo de oleadas y sus estampidas de corredores.
+
+CAMPAÑA E INFINITO
+Ocho misiones con objetivos (sobrevivir oleadas, juntar cosas, llegar a un punto, aguantar) que se abren de a una, y el modo infinito en cualquier lugar que hayas destrabado, con récords por mapa.
+
+EL ARSENAL: 104 ARMAS DESDE EL PRIMER MINUTO
+Pistolas, revólveres, subfusiles, escopetas, fusiles, francotiradores, ametralladoras, rotativas, lanzadores, armas de energía y rarezas exóticas. Cada una con su modelo, su acabado, su sonido y su balística: hitscan, rieles que atraviesan filas, relámpagos en cadena, granadas en parábola, arpones que clavan, chorros de fuego, ondas expansivas y vórtices. Nada se desbloquea: armás tu equipo de cinco ranuras en el ARSENAL (también desde la pausa) y salís a jugar. Entre oleadas siguen cayendo armas para cambiar sobre la marcha, y podés probar cualquiera en el polígono.
+
+PENSADO PARA EL TELÉFONO
+• Dos sticks flotantes: el izquierdo mueve (al fondo corre), el derecho apunta y empujándolo dispara, con ayuda de puntería.
+• Botones grandes para recargar, trepar o saltar, agacharse, linterna, cámara y pausa.
+• Vibración al disparar y al recibir un golpe; opción para zurdos; tamaño y opacidad de los controles a gusto.
+• Pantalla completa apaisada; la calidad se ajusta sola para mantener la fluidez.
+
+SIN SORPRESAS
+Sin publicidad, sin compras, sin cuenta, sin internet. Todo el juego vive en tu teléfono; el progreso y los ajustes se guardan en el aparato y nada sale de ahí.
+
+Código abierto: github.com/agustinyarrus/carrona

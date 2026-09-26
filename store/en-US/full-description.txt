@@ -1,0 +1,23 @@
+A small place. Lots of zombies. You, a flashlight and whatever weapons you pick.
+
+CARRONA is a top-down zombie shooter where every body is a real physics simulation: zombies don't play animations, they walk, run, trip, slam into walls, climb over desks and fall because a muscle model is holding them up. When you shoot them, the hit moves the part you hit: a shoulder shot throws the shoulder back, a leg shot drops them, a head shot switches them off. Missing a leg, they still crawl toward you.
+
+THE PLACES
+An office at night, a parking garage, a supermarket, a subway station and a hospital: low-poly scenes with real lights, shadows and fog, each with its own wave rhythm and its stampedes of runners.
+
+CAMPAIGN AND ENDLESS
+Eight missions with objectives (survive waves, collect things, reach a point, hold out) that unlock one by one, plus an endless mode in any place you have unlocked, with per-map records.
+
+THE ARMORY: 104 WEAPONS FROM MINUTE ONE
+Pistols, revolvers, SMGs, shotguns, rifles, snipers, machine guns, rotaries, launchers, energy weapons and exotic oddities. Each with its own model, finish, sound and ballistics: hitscan, rails that pierce whole rows, chain lightning, lobbed grenades, harpoons that pin, flame jets, shockwaves and vortices. Nothing is locked: build your five-slot loadout in the ARMORY (also from the pause menu) and go. Weapons keep dropping between waves so you can switch on the fly, and you can try any of them at the range.
+
+MADE FOR THE PHONE
+• Two floating sticks: the left one moves (push it all the way to run), the right one aims and fires when pushed, with aim assist.
+• Big buttons for reload, vault or jump, crouch, flashlight, camera and pause.
+• Vibration when you fire and when you get hit; a left-handed option; control size and opacity to taste.
+• Full-screen landscape; quality adjusts itself to keep things smooth.
+
+NO SURPRISES
+No ads, no purchases, no account, no internet. The whole game lives on your phone; progress and settings are stored on the device and nothing leaves it.
+
+Open source: github.com/agustinyarrus/carrona
