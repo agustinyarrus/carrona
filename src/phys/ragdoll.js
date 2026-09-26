@@ -49,6 +49,7 @@ const PRAD = new Float32Array([0.130, 0.075, 0.155, 0.095, 0.095, 0.070, 0.070, 
 // rigidez relativa del músculo por partícula (el torso manda, las manos flotan)
 const MUS = new Float32Array([0.85, 0.95, 1.00, 0.90, 0.90, 0.55, 0.55, 0.40, 0.40, 1.00, 0.95, 0.95, 0.75, 0.75, 0.85, 0.85]);
 
+
 // ── grupos de partículas que se recorren en cada frame ─────────────────────────
 //  Constantes del módulo y lazos por índice: `for (const i of [..])` arma un arreglo y un iterador en CADA
 //  llamada, y update/_syncTarget (enormes) pasan buena parte del tiempo en el tier base de V8, donde eso es
@@ -103,6 +104,34 @@ const DISTAL = {
   [B_SHINL]: [FTL], [B_SHINR]: [FTR],
 };
 
+// ── el músculo que suelta un impacto (ver Ragdoll._release) ───────────────────
+//  Tope de debilidad por partícula: el tronco sostiene el cuerpo y los pies plantados
+//  el equilibrio; soltarlos del todo por un tiro de pistola lo desplomaba
+const WEAK_CAP = new Float32Array([1.0, 0.85, 0.55, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.30, 0.45, 0.45, 0.80, 0.80, 0.35, 0.35]);
+const RELEASE_BASE = 0.75, RELEASE_PER_J = 0.03;      // debilidad en el punto de impacto: pistola (7 N·s) ≈ 0,96
+// una partícula SIN músculo (brazo colgando, pierna doblada) es carne, no soga: no supera esta velocidad
+// respecto del cuerpo. Sin el tope, el brazo baleado hacía látigo y la mano salía a 15 m/s
+const LIMP_VMAX = 4;
+// giro del torso por un tiro descentrado: guiñada = brazo de palanca × impulso, sobre la inercia de un
+// cuerpo (~1,5 kg·m²), con la misma exageración que el resto de los golpes
+const TORSO_SPIN_GAIN = 1.2;
+// cuánta velocidad puede darle un tiro a UNA partícula (m/s): la bala reparte su momento por el
+// tejido; un pie de 2 kg no sale a 6 m/s por 12 N·s. Lo que sobra pasa al otro extremo del hueso
+const HIT_DV_MAX = 3.5;
+const HEAD_KICK_MAX = 2.5;      // el empujón extra de la cabeza (J·0,35) también tiene techo
+const LEG_DROP_J = 18;          // de acá para arriba (francotirador) un tiro en la pierna desploma siempre
+// el cuello no mueve la cabeza a más de esto por músculo (m/s): aturdido (casi sin amortiguación), una pose
+// que le lleva la mano a la cara la mandaba 36 cm hacia adelante a 6 m/s justo después del snap del tiro
+const HEAD_MUSCLE_SPEED = 3.5;
+const RELEASE_FAR = 0.8, RELEASE_RING1 = 0.5, RELEASE_RING2 = 0.25;   // el otro extremo del hueso, a un hueso, a dos
+const RELEASE_TAU_MIN = 0.10, RELEASE_TAU_PER_J = 0.012, RELEASE_TAU_MAX = 0.32;   // recuperación (s): pistola ≈ 0,18
+// a cuánto vuelve a la pose una partícula soltada (m/s), por partícula. El músculo es un resorte con
+// ganancia 0,26 por substep: con 20 cm de error arrastraba la cabeza de vuelta a 9 m/s (látigo). El
+// tronco vuelve despacio: su inclinación arrastra la cabeza por el cuello con palanca ×2,5
+const RETURN_SPEED = new Float32Array([2.5, 1.5, 1.2, 2.5, 2.5, 3.0, 3.0, 3.0, 3.0, 1.0, 1.2, 1.2, 2.0, 2.0, 1.5, 1.5]);
+// vecinos de cada partícula por los huesos: para repartir la debilidad alrededor del golpe. O(1) por consulta
+const NEIGH = (() => { const n = Array.from({ length: NP }, () => []); for (const [a, b] of BONES) { n[a].push(b); n[b].push(a); } return Object.freeze(n.map(Object.freeze)); })();
+
 // bisagras: [articulación, extremo A, extremo B, signo, hueso prox, hueso dist,
 //            cos del semiángulo del cono de flexión permitido]
 //  El codo puede doblar hacia casi cualquier lado menos adelante (el hombro
@@ -154,6 +183,28 @@ const STYLE_TRAIT = ['jitter', 'lurch', 'limp', 'sway', 'wobble', 'headTilt', 'd
 let NEXT_GROUP = 1;
 const _out = {};
 const bell = (u, peak = 0.25) => u < peak ? u / peak : Math.max(0, 1 - (u - peak) / (1 - peak));
+
+/**
+ * Retorno de una partícula soltada: su velocidad respecto del cuerpo, en la
+ * dirección CONTRARIA al impulso (d), no pasa de `cap`. Hacia donde la mandó el
+ * golpe sigue libre. O(1).
+ */
+function capReturn(w, pi, tx, ty, tz, dx, dy, dz, cap) {
+  const ux = w.vx[pi] - tx, uy = w.vy[pi] - ty, uz = w.vz[pi] - tz;
+  const along = ux * dx + uy * dy + uz * dz;
+  if (along >= -cap) return;
+  const f = -cap - along;                 // lo que se pasó, positivo: se suma en la dirección del impulso
+  w.vx[pi] += dx * f; w.vy[pi] += dy * f; w.vz[pi] += dz * f;
+}
+
+/** Carne sin músculo: la velocidad respecto del cuerpo (tx,ty,tz) no pasa de LIMP_VMAX. O(1). */
+function capRelative(w, pi, tx, ty, tz) {
+  const ux = w.vx[pi] - tx, uy = w.vy[pi] - ty, uz = w.vz[pi] - tz;
+  const u2 = ux * ux + uy * uy + uz * uz;
+  if (u2 <= LIMP_VMAX * LIMP_VMAX) return;
+  const f = LIMP_VMAX / Math.sqrt(u2);
+  w.vx[pi] = tx + ux * f; w.vy[pi] = ty + uy * f; w.vz[pi] = tz + uz * f;
+}
 
 export class Ragdoll {
   /**
@@ -273,6 +324,11 @@ export class Ragdoll {
     this.muscleFloor = new Float32Array(NP).fill(1);
     this.limbMul = new Float32Array(NP).fill(1);
     this.legBuckle = [0, 0]; this.armLimp = [0, 0];
+    // lo que soltó el último impacto (0..1 por partícula) y a qué ritmo se recupera
+    this.hitWeak = new Float32Array(NP);
+    this.hitWeakTau = RELEASE_TAU_MIN;
+    this.hitWeakActive = false;          // hay partículas soltadas (evita recorrerlas por substep si no)
+    this.hitDirX = 0; this.hitDirY = 0; this.hitDirZ = 1;   // dirección del último impulso (el retorno va en contra)
     this.hitJ = 0;          // momento recibido recientemente (decae)
     this.lastHitX = 0; this.lastHitZ = 1;
     // trucos de Overgrowth: inclinarse hacia la aceleración, mirar al objetivo,
@@ -572,6 +628,15 @@ export class Ragdoll {
       }
     }
 
+    // — el músculo que soltó el último impacto vuelve solo (exponencial): mientras tanto
+    //   esas partículas ni se pegan a la pose ni frenan su velocidad: el golpe se ve —
+    if (this.hitWeakActive) {
+      const HW = this.hitWeak, hk = Math.exp(-dt / this.hitWeakTau);
+      let any = false;
+      for (let i = 0; i < NP; i++) { const v = HW[i]; if (v > 0.003) { LM[i] *= 1 - v; HW[i] = v * hk; any = true; } else if (v !== 0) HW[i] = 0; }
+      this.hitWeakActive = any;
+    }
+
     // — la máquina de estados: caídas, tirado, levantadas, descanso —
     this._stateStep(dt);
     const up = this.state === 'up';
@@ -705,7 +770,8 @@ export class Ragdoll {
       if (control && this.upright && ld > leash + 0.07) {
         const over = ld - leash;
         this.stagger = Math.min(0.9, this.stagger + over * 2.5);
-        if (over > 0.16) this.fall('knockback', hx - this.rootX, hz - this.rootZ, 1.2 + over);
+        // con una pierna doblada por un tiro no lo empujaron: se desploma
+        if (over > 0.16) this.fall(this.legBuckle[0] > 0 || this.legBuckle[1] > 0 ? 'collapse' : 'knockback', hx - this.rootX, hz - this.rootZ, 1.2 + over);
         else if (!stumbling) this.stumble(hx - this.rootX, hz - this.rootZ, 1.2 + over * 4, 0.35);
       }
       if (ld > leash) {
@@ -1133,7 +1199,8 @@ export class Ragdoll {
     if (this.balCool > 0) this.balCool -= dt;
     if (active && belF > 0.32 * S2 && this.upright) {
       const fx = this.balFX, fz = this.balFZ;
-      if (belF > 0.62 * S2) { this.stagger = Math.min(0.9, this.stagger + 0.3); this.fall('knockback', fx, fz, 1.0 + belF); }
+      // con una pierna doblada por un tiro no lo empujaron: se desploma
+      if (belF > 0.62 * S2) { this.stagger = Math.min(0.9, this.stagger + 0.3); this.fall(this.legBuckle[0] > 0 || this.legBuckle[1] > 0 ? 'collapse' : 'knockback', fx, fz, 1.0 + belF); }
       else if (this.balCool <= 0) { this.balCool = 0.45; this.recoveries++; this.stagger = Math.min(0.9, this.stagger + 0.12); this.stumble(fx, fz, 1.0 + belF * 3, 0.32); }
     }
   }
@@ -2249,8 +2316,12 @@ export class Ragdoll {
 
     const k = 1 - Math.exp(-this.stiffness * h);
     const maxStep0 = this.maxMuscleSpeed * h;
-    const LM = this.limbMul;
+    const LM = this.limbMul, HW = this.hitWeak;
     const bA = this.braceArms || 0;   // reflejo de caída: brazos (y cuello) más fuertes que el resto del cuerpo que cae
+    // el tope de la cabeza rige sólo mientras dura la reacción a un tiro, de pie: cayendo o con el
+    // reflejo de frenar la caída el cuello tiene que sostenerla a plena fuerza (el mentón al pecho)
+    const inFall = !!(this.seq && (this.seq.def.kind === 'fall' || this.seq.def.kind === 'die'));
+    const headCap = (this.hitWeakActive && bA <= 0 && !inFall) ? HEAD_MUSCLE_SPEED * h : Infinity;
 
     for (let i = 0; i < NP; i++) {
       let m = mus[i] * mg * MUS[i] * LM[i];
@@ -2268,8 +2339,11 @@ export class Ragdoll {
       let dx = (tx - w.px[pi]) * k * m;
       let dy = (ty - w.py[pi]) * k * m;
       let dz = (tz - w.pz[pi]) * k * m;
-      // techo por substep proporcional a la fuerza: un músculo débil mueve despacio
-      const maxStep = maxStep0 * Math.min(1, 2.5 * m);
+      // techo por substep proporcional a la fuerza: un músculo débil mueve despacio; una
+      // partícula soltada por un impacto vuelve a la pose a paso de músculo, no de resorte
+      let maxStep = maxStep0 * Math.min(1, 2.5 * m);
+      if (HW[i] > 0.003) { const rc = RETURN_SPEED[i] * h; if (maxStep > rc) maxStep = rc; }
+      if ((i === HEAD || i === NECK) && maxStep > headCap) maxStep = headCap;
       const dl2 = dx * dx + dy * dy + dz * dz;
       if (dl2 > maxStep * maxStep) {
         const f = maxStep / Math.sqrt(dl2);
@@ -2305,44 +2379,64 @@ export class Ragdoll {
     }
     const falling = !!(this.seq && (this.seq.def.kind === 'fall' || this.seq.def.kind === 'die'));
     const phys = this.limp > 0 ? 1 : (this.stagger > 0 ? clamp01(this.stagger / 0.55) * 0.9 : 0);
-    if (phys >= 0.999 && !falling) return;
     const kSub = 1 - Math.exp(-this.stiffness * h);
+    // las partículas que soltó un impacto (hitWeak) tienen su propio PD, limpio, aunque el
+    // cuerpo esté aturdido: con el músculo débil vuelan con el golpe y, a medida que el músculo
+    // vuelve, las frena en amortiguación crítica. Sin esto, el cuerpo aturdido (casi sin
+    // amortiguación: «la física manda») las dejaba volver como un látigo: la cabeza se iba 9 cm
+    // hacia atrás y rebotaba 26 cm hacia adelante a 6,5 m/s
+    const released = this.hitWeakActive && !falling;
+    if (phys >= 0.999 && !falling) { if (released) this._pdDamp(h, w, kSub, 0, true); return; }
     if (falling || phys > 0.35) {
       // Cayendo o aturdido la inercia manda: el conjunto conserva su impulso
       // lineal Y su giro. Pero cada miembro se amortigua respecto del movimiento
       // rígido del cuerpo: sin eso el músculo de la caída era un resorte sin
       // freno (un codo llegaba a 56 m/s en un tacle) y los miembros aleteaban.
       this._dampToRigid(h, w, falling ? 0.5 : (1 - phys) * 0.8, kSub);
+      if (released) this._pdDamp(h, w, kSub, 0, true);
       return;
     }
+    this._pdDamp(h, w, kSub, phys, false);
+  }
+
+  /**
+   * El PD de velocidad: cada partícula con músculo funde su velocidad hacia la
+   * velocidad objetivo del cuerpo (la del tambaleo, la de la secuencia, la del
+   * salto o la de la marcha; vertical: el arco del salto, si no cero: el PD
+   * frena los rebotes). Amortiguación CRÍTICA, no infinita: con k (rigidez por
+   * substep) y m, el resorte tiene ω = sqrt(k·m)/h; amortiguar a = 1.45·sqrt(k·m)
+   * por substep da ζ ≈ 0.7: el torso queda firme, los brazos y la cabeza siguen
+   * con un poco de retraso y sobrepaso. Eso es el "movimiento secundario" que
+   * separa un cuerpo de un robot. `onlyReleased`: sólo las partículas que soltó
+   * un impacto (el resto ya lo trató _dampToRigid). O(NP).
+   */
+  _pdDamp(h, w, kSub, phys, onlyReleased) {
     const stumbling = this.stumbleT > 0;
-    // velocidad objetivo: la del tambaleo, la de la secuencia (rodar, gatear,
-    // deslizarse), la del salto, o la de la marcha. Vertical: el arco del
-    // salto (si no, cero: el PD frena los rebotes)
     let vtx, vtz;
     if (stumbling) { vtx = this.rootVX; vtz = this.rootVZ; }
     else if (this.seq) { vtx = this.seq.vx; vtz = this.seq.vz; }
     else if (this.flight) { vtx = this.flight.vx; vtz = this.flight.vz; }
     else { vtx = this.wantX * this.curSpeed; vtz = this.wantZ * this.curSpeed; }
     const vty = this.tgtVY;
-    const P = this.p, mus = this.muscle, LM = this.limbMul;
-    // Amortiguación CRÍTICA, no infinita: con k (rigidez por substep) y m, el
-    // resorte tiene ω = sqrt(k·m)/h; amortiguar a = 1.45·sqrt(k·m) por substep
-    // da ζ ≈ 0.7: el torso queda firme, los brazos y la cabeza siguen con un
-    // poco de retraso y sobrepaso. Eso es el "movimiento secundario" que
-    // separa un cuerpo de un robot.
+    const P = this.p, mus = this.muscle, LM = this.limbMul, HW = this.hitWeak, mg = this.muscleGlobal;
     for (let i = 0; i < NP; i++) {
-      const m = mus[i] * mg * MUS[i] * LM[i];
-      if (m <= 0.002) continue;
+      const wk = HW[i];
+      if (onlyReleased && wk <= 0.003) continue;
       const pi = P[i];
       if (w.iw[pi] === 0) continue;
+      const m = mus[i] * mg * MUS[i] * LM[i];
+      if (m <= 0.002) { capRelative(w, pi, vtx, vty, vtz); continue; }
       // un miembro casi sin músculo (< 2 %) no amortigua: cuelga y cae con la
-      // gravedad de verdad, no flota
-      const a = (1 - phys) * Math.min(1, Math.max(0, (m - 0.02) * 14)) * Math.min(1, 1.45 * Math.sqrt(kSub * m));
-      if (a <= 0) continue;
-      w.vx[pi] += (vtx - w.vx[pi]) * a;
-      w.vy[pi] += (vty - w.vy[pi]) * a;
-      w.vz[pi] += (vtz - w.vz[pi]) * a;
+      // gravedad de verdad, no flota; uno soltado por un impacto frena en
+      // proporción a lo que le queda de músculo (con el golpe recién dado, casi nada)
+      const a = (1 - phys) * (1 - wk) * Math.min(1, Math.max(0, (m - 0.02) * 14)) * Math.min(1, 1.45 * Math.sqrt(kSub * m));
+      if (a > 0) {
+        w.vx[pi] += (vtx - w.vx[pi]) * a;
+        w.vy[pi] += (vty - w.vy[pi]) * a;
+        w.vz[pi] += (vtz - w.vz[pi]) * a;
+      }
+      // soltada: vuela con el golpe, pero VUELVE a paso de músculo (la componente en contra del impulso, acotada)
+      if (wk > 0.003) capReturn(w, pi, vtx, vty, vtz, this.hitDirX, this.hitDirY, this.hitDirZ, RETURN_SPEED[i]);
     }
   }
 
@@ -2386,17 +2480,19 @@ export class Ragdoll {
       oy = ((Ixz * Iyz - Ixy * Izz) * Lx + (Ixx * Izz - Ixz * Ixz) * Ly + (Ixy * Ixz - Ixx * Iyz) * Lz) * id;
       oz = ((Ixy * Iyz - Ixz * Iyy) * Lx + (Ixy * Ixz - Ixx * Iyz) * Ly + (Ixx * Iyy - Ixy * Ixy) * Lz) * id;
     }
+    const HW = this.hitWeak;
     for (let i = 0; i < NP; i++) {
       const pi = P[i]; if (w.iw[pi] === 0 || pg[pi] !== G) continue;
       let a = frac;
+      const rx = w.px[pi] - cx, ry = w.py[pi] - cy, rz = w.pz[pi] - cz;
+      const tx = vx + (oy * rz - oz * ry), ty = vy + (oz * rx - ox * rz), tz = vz + (ox * ry - oy * rx);
       if (kSub >= 0) {
+        if (HW[i] > 0.003) continue;                      // soltada por un impacto: tiene su propio PD
         const m = mus[i] * mg * MUS[i] * LM[i];
-        if (m <= 0.002) continue;
+        if (m <= 0.002) { capRelative(w, pi, tx, ty, tz); continue; }
         a *= Math.min(1, Math.max(0, (m - 0.02) * 14)) * Math.min(1, 1.45 * Math.sqrt(kSub * m));
       }
       if (a <= 0) continue;
-      const rx = w.px[pi] - cx, ry = w.py[pi] - cy, rz = w.pz[pi] - cz;
-      const tx = vx + (oy * rz - oz * ry), ty = vy + (oz * rx - ox * rz), tz = vz + (ox * ry - oy * rx);
       w.vx[pi] += (tx - w.vx[pi]) * a; w.vy[pi] += (ty - w.vy[pi]) * a; w.vz[pi] += (tz - w.vz[pi]) * a;
     }
   }
@@ -2862,7 +2958,8 @@ export class Ragdoll {
         def = SEQ.fall_pounce_hit;
       } else if (cause === 'slip') {
         def = SEQ.fall_slip;
-      } else if (power >= 1.9 && cause !== 'trip') {
+      } else if (power >= 1.9 && cause !== 'trip' && cause !== 'collapse') {
+        // (un desplome nunca vuela: la energía que el balance mide en una pierna que cede no es un empujón)
         def = pick([['fall_fly', 3], ['fall_cartwheel', sideW * 0.8], ['fall_helicopter', sideW * 0.5]]);
       } else if (cause === 'wall') {
         def = pick([['fall_wall_bounce', 3], ['fall_wall_face', moving ? 2 : 0.5], ['fall_wall_slide', 1.5], ['fall_wall_crumple', 1.2], ['fall_back_plank', 0.6], ['fall_side', 0.6]]);
@@ -3154,6 +3251,8 @@ export class Ragdoll {
    * @param {number} s        posición a lo largo del hueso (0..1)
    * @param {number} dmg      daño base
    * @param {number[]} imp    impulso [x,y,z] en N·s
+   * @param {number} [hx]     punto de impacto en el mundo (opcional): con él, un tiro
+   *                          descentrado en el tronco hace girar el cuerpo (palanca)
    * @returns {{zone:number, killed:boolean, severed:boolean, damage:number}}
    */
   //  Reacción al impacto, al estilo "physical animation" (Unreal/Euphoria):
@@ -3169,7 +3268,7 @@ export class Ragdoll {
   //   4. mucho momento en poco tiempo (escopeta, ráfaga) lo tira, con una
   //      caída elegida por el ángulo; un tiro en la pierna corriendo lo
   //      tropieza; un tiro fuerte en la pierna parado lo desploma.
-  hit(boneIdx, s, dmg, imp) {
+  hit(boneIdx, s, dmg, imp, hx = undefined, hy = undefined, hz = undefined) {
     const w = this.world;
     const res = { zone: BONES[boneIdx][4], killed: false, severed: false, damage: 0 };
     if (!this.boneAlive[boneIdx]) return res;
@@ -3181,8 +3280,13 @@ export class Ragdoll {
     if (imp) {
       J = Math.hypot(imp[0], imp[1], imp[2]);
       if (J > 1e-6) { dx = imp[0] / J; dy = imp[1] / J; dz = imp[2] / J; }
-      w.addImpulse(pa, imp[0] * (1 - s), imp[1] * (1 - s), imp[2] * (1 - s));
-      w.addImpulse(pb, imp[0] * s, imp[1] * s, imp[2] * s);
+      // el impulso local, repartido por dónde pegó, con techo de velocidad por partícula
+      let ja = J * (1 - s), jb = J * s;
+      const capA = HIT_DV_MAX / (w.iw[pa] || 1e9), capB = HIT_DV_MAX / (w.iw[pb] || 1e9);   // N·s que dan HIT_DV_MAX
+      if (ja > capA) { jb += ja - capA; ja = capA; }
+      if (jb > capB) { ja = Math.min(capA, ja + jb - capB); jb = capB; }
+      w.addImpulse(pa, dx * ja, dy * ja, dz * ja);
+      w.addImpulse(pb, dx * jb, dy * jb, dz * jb);
       if (!this.dead && J > 0) {
         const M = 70 * this.massScale * S * S * S;
         const dv = (J / M) * 1.8;
@@ -3194,6 +3298,8 @@ export class Ragdoll {
           w.vx[pi] += dx * dv * f; w.vz[pi] += dz * dv * f;
         }
         this.hitJ += J;
+        this.hitDirX = dx; this.hitDirY = dy; this.hitDirZ = dz;
+        this._release(boneIdx, s, J);
       }
     }
 
@@ -3224,9 +3330,11 @@ export class Ragdoll {
       if (zone === 0) {
         // la cabeza se va con el tiro
         const ph = this.p[HEAD];
-        if (w.iw[ph] > 0) { w.vx[ph] += dx * J * 0.35; w.vy[ph] += 0.4; w.vz[ph] += dz * J * 0.35; }
+        if (w.iw[ph] > 0) { const kick = Math.min(HEAD_KICK_MAX, J * 0.35); w.vx[ph] += dx * kick; w.vy[ph] += 0.4; w.vz[ph] += dz * kick; }
         this.stagger = Math.min(0.9, this.stagger + 0.25 * this.staggerScale);
-        if (up) this.playOverlay(pickOv([['fl_head_snap', big ? 0.5 : 3], ['fl_whiplash', 2], ['fl_jolt', big ? 3 : 0.3], ['fl_clutch_face', 1.2], ['fl_convulse', big ? 1 : 0.1]]), kk, ctx);
+        // el latigazo lo pone la física (la cabeza soltada vuela con el tiro): las poses que la
+        // mandaban hacia ADELANTE (whiplash, jolt) casi no se sortean, quedan las que agregan carácter
+        if (up) this.playOverlay(pickOv([['fl_head_snap', big ? 2 : 3], ['fl_whiplash', 0.4], ['fl_jolt', big ? 1.5 : 0.2], ['fl_clutch_face', 1.5], ['fl_convulse', big ? 1 : 0.1]]), kk, ctx);
         if (up && dmg >= 18 && R() < 0.5) this._setWound(0, ctx.sx, dmg);
       } else if (zone === 1) {
         if (up) {
@@ -3238,14 +3346,17 @@ export class Ragdoll {
             if (dmg >= 20 && R() < 0.5) this._setWound(2, ctx.sx, dmg);
           } else if (boneIdx === B_PELVL || boneIdx === B_PELVR) {
             this.playOverlay(pickOv([[Math.abs(L.lat) > 0.5 ? 'fl_side_lean' : 'fl_hip_thrust', 3], ['fl_hip_twist', 2], ['fl_knee_dip', 1]]), kk, ctx);
+            this._leverSpin(hx, hz, dx, dz, J);
           } else if (boneIdx === B_SPINE && s > 0.55) {
             // bajo vientre: de frente se dobla; por la espalda la cadera se va
             this.playOverlay(pickOv([[L.along < 0 ? 'fl_gut' : 'fl_hip_thrust', 3], ['fl_clutch_gut', L.along < 0 ? 2 : 0.3], ['fl_knee_dip', 1]]), kk, ctx);
             if (dmg >= 20 && R() < 0.6) this._setWound(1, ctx.sx, dmg);
+            this._leverSpin(hx, hz, dx, dz, J);
           } else {
             const base = L.along < -0.3 ? 'fl_chest_fold' : L.along > 0.3 ? 'fl_back_arch' : 'fl_side_lean';
             this.playOverlay(pickOv([[base, 3], ['fl_knee_dip', 1.2], ['fl_balance_arms', 1], ['fl_convulse', big ? 1.5 : 0.2], ['fl_crumple_partial', big ? 2 : 0.3], ['fl_whiplash', 0.6]]), kk, ctx);
             if (dmg >= 22 && R() < 0.45) this._setWound(1, ctx.sx, dmg);
+            this._leverSpin(hx, hz, dx, dz, J);
           }
         }
       } else if (zone === 2) {
@@ -3261,8 +3372,10 @@ export class Ragdoll {
           // corriendo, una pierna baleada = tropezón (el corredor da la voltereta)
           this.tripped++;
           fell = this.fall('trip', this.fx, this.fz, 0.9);
-        } else if (up && big && R() < 0.4) {
-          // un tiro fuerte en la pierna parado: se desploma de ese lado
+        } else if (up && big && (R() < 0.4 || J >= LEG_DROP_J)) {
+          // un tiro fuerte en la pierna parado: se desploma de ese lado. Uno de francotirador,
+          // siempre y YA: si la pierna se pliega primero y el balance declara la caída con el
+          // cuerpo hundido, la pose de arranque de la caída lo levantaba de un tirón (7 m/s)
           fell = this.fall('collapse', hdx, hdz, 0.8);
         } else {
           this.legBuckle[side] = Math.max(this.legBuckle[side], 0.45 + dmg * 0.01);
@@ -3290,6 +3403,56 @@ export class Ragdoll {
       res.severed = true;
     }
     return res;
+  }
+
+  /**
+   * Suelta el músculo alrededor del hueso golpeado, así el impulso lo mueve
+   * de verdad: con el músculo firme, el PD (amortiguación crítica a 420 Hz)
+   * borraba el golpe en tres substeps y un tiro de pistola desplazaba el
+   * hombro 8 mm; lo que se veía era la pose del sacudón, no la bala. Debilidad
+   * máxima en el extremo más cercano al impacto, algo menos en el otro, la
+   * mitad a un hueso, un cuarto a dos; el tronco y los pies con tope (sostienen
+   * el cuerpo). Los límites articulares frenan el miembro y el músculo lo trae
+   * de vuelta en `hitWeakTau` segundos, más lento con más momento. O(NP).
+   */
+  _release(boneIdx, s, J) {
+    const [ia, ib] = BONES[boneIdx];
+    const k0 = clamp(RELEASE_BASE + J * RELEASE_PER_J, 0, 1);
+    // continuo en `s` (dónde pegó a lo largo del hueso): en el medio los dos extremos se sueltan
+    // casi por igual. Con un filo en 0,5 un tiro real al medio de la clavícula (s = 0,49) soltaba
+    // el pecho (que tiene tope) y no el hombro: 1,7 cm en el juego contra 15 en el banco
+    const fa = 1 - s * (1 - RELEASE_FAR), fb = RELEASE_FAR + s * (1 - RELEASE_FAR);
+    const W = this.hitWeak;
+    const put = (i, f) => { const v = Math.min(WEAK_CAP[i], k0 * f); if (v > W[i]) W[i] = v; };
+    put(ia, fa); put(ib, fb);
+    const ring = (from, other, f) => {
+      const r1 = NEIGH[from];
+      for (let q = 0; q < r1.length; q++) {
+        const j = r1[q]; if (j === other) continue;
+        put(j, RELEASE_RING1 * f);
+        const r2 = NEIGH[j];
+        for (let z = 0; z < r2.length; z++) { const k = r2[z]; if (k !== from && k !== other) put(k, RELEASE_RING2 * f); }
+      }
+    };
+    ring(ia, ib, fa); ring(ib, ia, fb);
+    this.hitWeakTau = Math.max(this.hitWeakTau * 0.5, clamp(RELEASE_TAU_MIN + J * RELEASE_TAU_PER_J, RELEASE_TAU_MIN, RELEASE_TAU_MAX));
+    this.hitWeakActive = true;
+  }
+
+  /**
+   * Giro del cuerpo por un tiro descentrado en el tronco: guiñada = (brazo de
+   * palanca del punto de impacto respecto de la cadera) × (impulso horizontal),
+   * en el marco del cuerpo. Un tiro justo al centro no gira; uno en el costado
+   * del pecho gira hacia el lado contrario, como el hombro. Sin punto de impacto
+   * (pruebas viejas, explosiones) no hace nada. O(1).
+   */
+  _leverSpin(hx, hz, dx, dz, J) {
+    if (hx === undefined || this.lockYaw || J <= 0) return;
+    const c = Math.cos(this.yaw), sn = Math.sin(this.yaw);
+    const ax = hx - this.x, az = hz - this.z;
+    const armLat = ax * c - az * sn, armAlong = ax * sn + az * c;          // palanca en el marco del cuerpo
+    const jLat = (dx * c - dz * sn) * J, jAlong = (dx * sn + dz * c) * J;  // impulso horizontal, ídem
+    this.spin -= (armLat * jAlong - armAlong * jLat) * TORSO_SPIN_GAIN;
   }
 
   _weakenAround(boneIdx, amt) {

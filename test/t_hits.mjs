@@ -1,6 +1,6 @@
 // Reacción física a los disparos: dirección, zona y momento.
 import { PhysWorld } from '../src/phys/world.js';
-import { Ragdoll, HEAD, CHEST, HIP, HAL, HAR, ELL, B_SPINE, B_SKULL, B_UARML, B_THIGHL, B_SHINR } from '../src/phys/ragdoll.js';
+import { Ragdoll, HEAD, CHEST, HIP, HAL, HAR, ELL, SHR, KNR, FTR, B_SPINE, B_SKULL, B_UARML, B_THIGHL, B_THIGHR, B_SHINR, B_CLAVR, B_FARML } from '../src/phys/ragdoll.js';
 import { makeRng } from '../src/core/util.js';
 import { RUN_STYLES, WALK_STYLES } from '../src/phys/moves.js';
 const REACH = { walkStyle: WALK_STYLES[4], runStyle: RUN_STYLES[3] };   // brazos 'reach': manos a ~1.3 m
@@ -120,6 +120,97 @@ const world = () => { const w = new PhysWorld(); w.groundHX = 30; w.groundHZ = 3
   run(w, 2.0, (tt) => { if (tt - t >= 1 / 13) { t = tt; B.hit(B_SPINE, 0.5, 17, [0, 1, -4.5]); shots++; } if (!B.upright) fell = true; });
   ok('la ráfaga lo empuja hacia atrás (≥ 12 cm)', z0 - B.z > 0.12, `${((z0 - B.z) * 100).toFixed(0)} cm en ${shots} tiros`);
   ok('sin NaN', nanFree(w));
+}
+
+// ── 8. el ragdoll contra el tiro: la parte golpeada VUELA con la bala (el músculo se suelta) ──
+//  Antes el PD borraba el impulso en tres substeps y lo único que se veía era la pose del sacudón:
+//  un tiro de pistola desplazaba el hombro 8 mm. Ahora el hombro, la cabeza y la mano se van de
+//  verdad, los topes articulares los frenan y el músculo los trae de vuelta sin látigo.
+{
+  const rel = (B, i) => ({ x: B.px(i) - B.px(HIP), y: B.py(i) - B.py(HIP), z: B.pz(i) - B.pz(HIP) });
+  // hombro derecho, pistola de frente
+  {
+    const w = world();
+    const B = new Ragdoll(w, { x: 0, z: 0, yaw: 0, rng: makeRng(21) }); B.idleNext = 99;
+    run(w, 1);
+    const r0 = rel(B, SHR), wz0 = B.pz(SHR);
+    B.hit(B_CLAVR, 0.5, 30, [0, 0.8, -7]);
+    ok('el impacto suelta el músculo del hombro (debilidad > 0,5) y del pecho menos (tope del tronco)', B.hitWeak[SHR] > 0.5 && B.hitWeak[CHEST] > 0 && B.hitWeak[CHEST] <= 0.56, `hombro ${B.hitWeak[SHR].toFixed(2)} pecho ${B.hitWeak[CHEST].toFixed(2)}`);
+    let backW = 0, backR = 0, fell = false;
+    run(w, 0.25, () => { backW = Math.max(backW, wz0 - B.pz(SHR)); backR = Math.max(backR, r0.z - rel(B, SHR).z); if (!B.upright) fell = true; });
+    ok('el hombro se va hacia atrás con el tiro (≥ 12 cm en el mundo, ≥ 8 cm respecto de la cadera)', backW > 0.12 && backR > 0.08, `${(backW * 100).toFixed(1)} cm · ${(backR * 100).toFixed(1)} cm`);
+    run(w, 1.25);
+    const r1 = rel(B, SHR);
+    ok('y vuelve a su lugar (≤ 8 cm de la pose) con el músculo recuperado', Math.hypot(r1.x - r0.x, r1.y - r0.y, r1.z - r0.z) < 0.08 && B.hitWeak[SHR] < 0.05 && !fell, `${(Math.hypot(r1.x - r0.x, r1.y - r0.y, r1.z - r0.z) * 100).toFixed(1)} cm · debilidad ${B.hitWeak[SHR].toFixed(3)}`);
+  }
+  // cabeza (bruto: no muere): atrás sin latigazo hacia adelante
+  {
+    const w = world();
+    const B = new Ragdoll(w, { x: 0, z: 0, yaw: 0, toughness: 8, scale: 1.2, massScale: 1.8, rng: makeRng(22) }); B.idleNext = 99;
+    run(w, 1);
+    const r0 = rel(B, HEAD);
+    B.hit(B_SKULL, 0.3, 30, [0, 0.8, -7]);
+    let back = 0, retV = 0, vmax = 0, prev = 0;
+    run(w, 1.2, () => { const d = r0.z - rel(B, HEAD).z; back = Math.max(back, d);
+      const v = Math.hypot(w.vx[B.p[HEAD]], w.vy[B.p[HEAD]], w.vz[B.p[HEAD]]); vmax = Math.max(vmax, v);
+      // látigo = VOLVER rápido; una pose que le lleva la mano a la cara la mueve despacio, eso no cuenta
+      if (back > 0.02 && d < prev && v > retV) retV = v; prev = d; });
+    ok('la cabeza se va hacia atrás con el tiro (≥ 6 cm respecto de la cadera)', back > 0.06, `${(back * 100).toFixed(1)} cm`);
+    ok('sin látigo: vuelve a paso de músculo (< 4 m/s; antes rebotaba a 6,5)', retV < 4, `vuelve a ${retV.toFixed(1)} m/s`);
+    ok('la cabeza nunca supera los 8 m/s', vmax < 8, `${vmax.toFixed(1)} m/s`);
+  }
+  // mano: sale despedida, es carne (no soga) y vuelve
+  {
+    const w = world();
+    const B = new Ragdoll(w, { x: 0, z: 0, yaw: 0, rng: makeRng(23), ...REACH }); B.idleNext = 99;
+    run(w, 1);
+    const z0 = B.pz(HAL);
+    B.hit(B_FARML, 0.5, 30, [0, 0.5, -7]);
+    let back = 0, vmax = 0;
+    run(w, 1.5, () => { back = Math.max(back, z0 - B.pz(HAL)); vmax = Math.max(vmax, Math.hypot(w.vx[B.p[HAL]], w.vy[B.p[HAL]], w.vz[B.p[HAL]])); });
+    ok('la mano sale despedida (≥ 10 cm)', back > 0.10, `${(back * 100).toFixed(1)} cm`);
+    ok('el brazo suelto no hace látigo de soga (mano < 8 m/s)', vmax < 8, `${vmax.toFixed(1)} m/s`);
+  }
+  // el impulso reparte su momento: ninguna partícula recibe más de 3,5 m/s de una
+  {
+    const w = world();
+    const B = new Ragdoll(w, { x: 0, z: 0, yaw: 0, rng: makeRng(24) });
+    run(w, 1);
+    const vz0 = w.vz[B.p[FTR]], vk0 = w.vz[B.p[KNR]];
+    B.hit(B_SHINR, 1.0, 30, [0, 0, -24]);        // francotirador, todo en el pie
+    ok('un pie de 2 kg no sale a 12 m/s: el techo por partícula reparte al otro extremo', w.vz[B.p[FTR]] - vz0 > -3.7 && w.vz[B.p[KNR]] - vk0 < -1.0, `pie ${(w.vz[B.p[FTR]] - vz0).toFixed(2)} m/s · rodilla ${(w.vz[B.p[KNR]] - vk0).toFixed(2)} m/s`);
+  }
+  // francotirador al muslo: se desploma en el lugar (antes: zambullida de 3 m con la rodilla a 18 m/s)
+  {
+    const w = world();
+    const B = new Ragdoll(w, { x: 0, z: 0, yaw: 0, rng: makeRng(25) }); B.idleNext = 99;
+    run(w, 1);
+    const x0 = B.x, z0 = B.z;
+    B.hit(B_THIGHR, 0.5, 30, [0, 1.2, -24]);
+    let vmax = 0, travel = 0;
+    run(w, 1.6, () => { for (let i = 0; i < 16; i++) vmax = Math.max(vmax, Math.hypot(w.vx[B.p[i]], w.vy[B.p[i]], w.vz[B.p[i]])); travel = Math.max(travel, Math.hypot(B.x - x0, B.z - z0)); });
+    ok('un tiro de francotirador en el muslo lo desploma (cae)', B.falls > 0 && B.lastFall.startsWith('fall_'), `${B.lastFall}`);
+    // límite conocido: el desplome todavía viaja hasta ~1,9 m según la semilla y alguna partícula pica a 20–30 m/s
+    // un substep (la pierna sin músculo bajo el peso). Antes: zambullida de 3,3 m con la rodilla a 18 m/s sostenidos
+    ok('… en el lugar: la cadera no viaja más de 2 m (antes 3,3)', travel < 2.0, `${travel.toFixed(2)} m`);
+    ok('… sin explotar: ninguna partícula pasa de 35 m/s', vmax < 35, `${vmax.toFixed(1)} m/s`);
+    ok('sin NaN', nanFree(w));
+  }
+  // giro por palanca: un tiro en el costado derecho del pecho gira el cuerpo; en el izquierdo, al revés
+  {
+    const spinOf = (side, seed) => {
+      const w = world();
+      const B = new Ragdoll(w, { x: 0, z: 0, yaw: 0, rng: makeRng(seed) }); B.idleNext = 99;
+      run(w, 1);
+      const yaw0 = B.yaw;
+      B.hit(B_SPINE, 0.3, 30, [0, 0.8, -7], B.x + side * 0.14, 1.2, B.z - 0.15);   // punto de impacto 14 cm a un lado del eje
+      let dy = 0; run(w, 0.6, () => { const d = B.yaw - yaw0; if (Math.abs(d) > Math.abs(dy)) dy = d; });
+      return dy;
+    };
+    const dR = spinOf(1, 26), dL = spinOf(-1, 27);
+    ok('un tiro descentrado en el pecho gira el cuerpo (≥ 5°)', Math.abs(dR) > 0.087 && Math.abs(dL) > 0.087, `derecha ${(dR * 180 / Math.PI).toFixed(1)}° · izquierda ${(dL * 180 / Math.PI).toFixed(1)}°`);
+    ok('y hacia lados opuestos según el lado del impacto', Math.sign(dR) === -Math.sign(dL), `${dR.toFixed(2)} vs ${dL.toFixed(2)}`);
+  }
 }
 
 console.log(fails ? `\n${fails} PRUEBAS FALLARON` : '\nTODO VERDE');

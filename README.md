@@ -604,6 +604,21 @@ hueso tiene puntos de vida propios; sólo escopeta y fusil llegan a cortar un mi
   de visión al pecho), cortan miembros cerca del centro y empujan todo lo que tenga partículas.
 - **Los estados** (fuego, frío, choque, ácido) viven en el zombi y en un conjunto de afectados:
   el paso cuesta O(afectados), no O(horda), y la baja por daño en el tiempo es del arma que lo prendió.
+- **La reacción al tiro es física, parte por parte.** El músculo es un controlador PD con
+  amortiguación crítica a 420 Hz: firme, borraba el impulso de una bala en tres substeps y un tiro
+  de pistola desplazaba el hombro 8 mm (lo que se veía era la pose del sacudón). Ahora el impacto
+  **suelta el músculo alrededor del hueso golpeado**, más en el extremo donde pegó, la mitad a un
+  hueso de distancia, un cuarto a dos, con tope en el tronco y en los pies (sostienen el cuerpo), y
+  el músculo vuelve solo, más despacio cuanto más momento trajo el tiro. Así el hombro se va 15 cm
+  hacia atrás, la cabeza 10, la mano 15, y los topes articulares los frenan. Las partículas soltadas
+  tienen su propio PD (crítico aunque el cuerpo esté aturdido) y vuelven a la pose a paso de
+  músculo, no de resorte: sin látigo (la cabeza rebotaba 23 cm hacia adelante a 6,5 m/s). Un miembro
+  sin músculo es carne, no soga: no pasa de 4 m/s respecto del cuerpo. La bala reparte su momento por
+  el tejido: ninguna partícula recibe más de 3,5 m/s de una. Un tiro descentrado en el tronco gira el
+  cuerpo por su brazo de palanca real. Los topes articulares (mínimos y máximos) son inelásticos: la
+  posición anterior se mueve con la corrección, el tope sostiene sin patear (una pierna que se
+  estiraba de golpe catapultaba el cuerpo 3 m). Una pierna que cede por un tiro desploma, nunca
+  «sale volando», y un tiro de francotirador en la pierna desploma al instante.
 
 | Arma | Daño | Cadencia | Cargador | Impulso |
 |---|---|---|---|---|
@@ -736,7 +751,9 @@ node test/t_props.mjs          # dormir, despertar, apilar
 node test/t_realism.mjs        # colgado de un escritorio, choque de pared, levantarse, límites
 node test/t_horde.mjs          # horda + armas + jugador, perforación determinista
 node test/t_stampede.mjs       # choques a la carrera, tropezones, marchas, pasos laterales
-node test/t_hits.mjs           # reacción a los tiros por dirección, zona y momento
+node test/t_hits.mjs           # reacción a los tiros por dirección, zona y momento, y la física local del
+                               # impacto: hombro, cabeza sin látigo, mano, techo por partícula, giro por
+                               # palanca, desplome por francotirador
 node test/t_anim.mjs           # trepar, agacharse, aterrizar, inclinarse, brazos al caer
 node test/t_moves.mjs          # el catálogo: cada levantada, caída, muerte, sacudón, ataque, tic,
                                # estilo y descanso, uno por uno (131 pruebas)

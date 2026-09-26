@@ -428,6 +428,7 @@ export class PhysWorld {
   // ── solver de distancia con compliance (XPBD) ────────────────────────────
   _solveConstraints(h) {
     const px = this.px, py = this.py, pz = this.pz, iw = this.iw;
+    const qx = this.qx, qy = this.qy, qz = this.qz;
     const h2 = h * h;
     for (let i = 0; i < this.cn; i++) {
       if (!this.calive[i]) continue;
@@ -448,6 +449,14 @@ export class PhysWorld {
       const s = lam / d;
       px[a] -= dx * s * wa; py[a] -= dy * s * wa; pz[a] -= dz * s * wa;
       px[b] += dx * s * wb; py[b] += dy * s * wb; pz[b] += dz * s * wb;
+      // un TOPE (mínimo o máximo: límite articular, riostra del cuello) es inelástico: la
+      // posición anterior se mueve con la corrección, así el tope sostiene sin meter
+      // velocidad. Elástico, una pierna que se estiraba de golpe al llegar a su tope
+      // (tiro fuerte al muslo) catapultaba el cuerpo 3 m con la rodilla a 18 m/s
+      if (t !== CT_DIST) {
+        qx[a] -= dx * s * wa; qy[a] -= dy * s * wa; qz[a] -= dz * s * wa;
+        qx[b] += dx * s * wb; qy[b] += dy * s * wb; qz[b] += dz * s * wb;
+      }
     }
   }
 

@@ -775,7 +775,7 @@ export class Game {
     if (Z) mult *= this.status.vulnerability(Z);
     if (fx.hs && zone === 0) mult *= fx.hs;
     if (fx.sever && zone >= 2) mult *= fx.sever;
-    const res = body.hit(bone, s, dmg * mult, imp);
+    const res = body.hit(bone, s, dmg * mult, imp, info.x, info.y, info.z);
     if (body.player) {
       // tu propio disco que rebota o tu arpón también duelen (menos)
       if (info.kind === 'proj' && this.player && this.player.alive) { if (this.player.damage(dmg * 0.35, info.x - info.dirx, info.z - info.dirz)) this._playerDied(); }
