@@ -1,3 +1,5 @@
+<p align="right"><sub><a href="PUBLICAR.en.md">English</a> · <b>Español</b></sub></p>
+
 # Publicar CARRONA en Google Play — el paso a paso completo
 
 Todo lo que Play pide ya está en esta carpeta; lo único que no se puede hacer desde afuera de tu
